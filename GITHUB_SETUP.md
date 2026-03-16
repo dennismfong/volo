@@ -17,28 +17,53 @@ In your terminal, run:
 ```bash
 cd /Users/dennis.fong/volo
 
-# Initialize git if not already done
-git init
-
 # Add all files
 git add .
 
-# Commit
-git commit -m "Initial commit: Volo Sports bot"
-
-# Add your GitHub repository (replace YOUR_USERNAME with your GitHub username)
-git remote add origin https://github.com/YOUR_USERNAME/volo-bot.git
+# Commit any changes
+git commit -m "Add Volo bot files"
 
 # Push to GitHub
-git branch -M main
-git push -u origin main
+# If you get authentication errors, see PUSH_FIX.md for solutions
+git push origin master
+```
+
+**Having authentication issues?** See [PUSH_FIX.md](PUSH_FIX.md) for detailed solutions.
+
+**Quick fix:** Install GitHub CLI and authenticate:
+```bash
+brew install gh
+gh auth login
+git push origin master
 ```
 
 ## Step 3: Add Secrets to GitHub
 
+There are a few ways to access secrets. Try these:
+
+### Method 1: Via Settings Tab
 1. Go to your repository on GitHub
-2. Click **Settings** → **Secrets and variables** → **Actions**
-3. Click **New repository secret** and add:
+2. Click the **Settings** tab (at the top of the repository)
+3. In the left sidebar, look for **Secrets and variables** → **Actions**
+   - If you don't see it, try scrolling down in the sidebar
+   - It might be under "Security" or "Code security and analysis"
+4. Click **New repository secret** and add:
+
+### Method 2: Direct URL
+1. Go to: `https://github.com/YOUR_USERNAME/volo-bot/settings/secrets/actions`
+   - Replace `YOUR_USERNAME` with your GitHub username
+   - Replace `volo-bot` with your repository name
+2. Click **New repository secret** and add:
+
+### Method 3: Via Actions Tab
+1. Go to your repository → **Actions** tab
+2. Click on "Volo Sports Bot" workflow (or any workflow)
+3. Click **Run workflow** dropdown
+4. You might see a link to "configure secrets" if they're missing
+
+### Adding the Secrets:
+
+Click **New repository secret** and add each of these:
 
    **Secret 1:**
    - Name: `VOLO_EMAIL`
