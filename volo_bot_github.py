@@ -282,38 +282,57 @@ class VoloBot:
                         import re
                         
                         # FIRST: Check the entire event element (including all child divs) for price patterns
-                        # The price is in a div under text, and may be split across multiple text nodes
-                        # Get combined text from the event and all child divs (this combines split text nodes)
-                        all_text = event_text  # inner_text() already combines text nodes
-                        all_html = event_html
+                        # The price is in a div under text, and "$" and "10" are separate text nodes in the same div
+                        # inner_text() should combine them, but we need to check each div individually
                         
-                        # Also get text from all child divs (inner_text combines split text nodes)
+                        # Get text from all divs - each div's inner_text() will combine its child text nodes
+                        all_text_parts = []
+                        
+                        # Start with the event's own text
+                        if event_text:
+                            all_text_parts.append(event_text)
+                        
+                        # Get text from all child divs (inner_text() combines split text nodes like "$" and "10")
                         try:
                             all_divs = event.query_selector_all("div")
                             for div in all_divs:
                                 try:
-                                    div_text = div.inner_text() or ""  # inner_text() combines all text nodes
-                                    all_text += " " + div_text
+                                    div_text = div.inner_text() or ""  # This combines "$" and "10" into "$10"
+                                    if div_text.strip():
+                                        all_text_parts.append(div_text)
+                                        # Debug: log if we find a div with "$" to see if it's being combined
+                                        if "$" in div_text:
+                                            logger.debug(f"  Found div with '$': '{div_text[:50]}'")
                                 except:
                                     pass
                         except:
                             pass
                         
-                        # Also check all span elements (prices might be in spans)
+                        # Also check all span elements
                         try:
                             all_spans = event.query_selector_all("span")
                             for span in all_spans:
                                 try:
                                     span_text = span.inner_text() or ""
-                                    all_text += " " + span_text
+                                    if span_text.strip():
+                                        all_text_parts.append(span_text)
                                 except:
                                     pass
                         except:
                             pass
                         
+                        # Combine all text parts
+                        all_text = " ".join(all_text_parts)
+                        
                         # Look for $X or $X.XX patterns in all combined text
-                        # inner_text() should combine text nodes, but if price is split, we need to check parent elements
+                        # inner_text() should have combined "$" and "10" into "$10" if they're in the same div
                         price_matches = re.findall(r'\$[\d.]+', all_text)
+                        
+                        # Log what we found for debugging
+                        if price_matches:
+                            logger.info(f"  Found price patterns in combined text: {price_matches}")
+                        else:
+                            logger.debug(f"  No price patterns found. Sample text checked: {all_text[:200]}")
                         
                         # If no price pattern found, check for split text nodes:
                         # Look for "$" and numbers in the same parent element
