@@ -122,11 +122,89 @@ class VoloBot:
             logger.error(f"Login failed: {e}")
             return False
     
+    def find_matching_pickups(self):
+        """Find all pickup events and filter for 'Volleyball Pickup' with $0 total"""
+        try:
+            logger.info("Searching for pickup events...")
+            time.sleep(2)  # Wait for page to load
+            
+            # Find all pickup/event cards/items
+            # These selectors will need to be adjusted based on actual website structure
+            pickup_selectors = [
+                "//div[contains(@class, 'event')]",
+                "//div[contains(@class, 'pickup')]",
+                "//div[contains(@class, 'card')]",
+                "//article",
+                "//li[contains(@class, 'event')]",
+            ]
+            
+            matching_pickups = []
+            events = []
+            
+            for selector in pickup_selectors:
+                try:
+                    events = self.driver.find_elements(By.XPATH, selector)
+                    if events:
+                        logger.info(f"Found {len(events)} potential events using selector: {selector}")
+                        break
+                except:
+                    continue
+            
+            if not events:
+                logger.warning("No events found with any selector")
+                return []
+            
+            # Filter events
+            for event in events:
+                try:
+                    # Get the event text/title
+                    event_text = event.text.lower()
+                    event_html = event.get_attribute('innerHTML') or ''
+                    
+                    # Check if title contains "Volleyball Pickup"
+                    if "volleyball pickup" not in event_text and "volleyball pickup" not in event_html.lower():
+                        continue
+                    
+                    logger.info(f"Found event with 'Volleyball Pickup' in title: {event_text[:100]}")
+                    
+                    # Check for $0 total
+                    # Look for price indicators: $0, Free, 0.00, etc.
+                    price_indicators = ["$0", "$0.00", "free", "0.00", "total: $0", "total: $0.00"]
+                    has_free_price = any(indicator in event_text or indicator in event_html.lower() for indicator in price_indicators)
+                    
+                    if not has_free_price:
+                        # Try to find price elements more specifically
+                        try:
+                            price_elements = event.find_elements(By.XPATH, ".//*[contains(@class, 'price') or contains(@class, 'cost') or contains(@class, 'total')]")
+                            for price_elem in price_elements:
+                                price_text = price_elem.text.lower()
+                                if any(indicator in price_text for indicator in price_indicators):
+                                    has_free_price = True
+                                    break
+                        except:
+                            pass
+                    
+                    if has_free_price:
+                        logger.info("✓ Event matches criteria: 'Volleyball Pickup' and $0 total")
+                        matching_pickups.append(event)
+                    else:
+                        logger.info(f"✗ Event has 'Volleyball Pickup' but not $0: {event_text[:100]}")
+                        
+                except Exception as e:
+                    logger.warning(f"Error processing event: {e}")
+                    continue
+            
+            logger.info(f"Found {len(matching_pickups)} matching pickup(s)")
+            return matching_pickups
+            
+        except Exception as e:
+            logger.error(f"Error finding pickups: {e}")
+            return []
+    
     def signup_for_volleyball(self):
-        """Navigate to volleyball pickups and sign up"""
+        """Navigate to volleyball pickups and sign up for matching events"""
         try:
             # Navigate to volleyball section
-            # Adjust these selectors based on actual website structure
             logger.info("Navigating to volleyball pickups")
             
             # Try to find volleyball/pickup link
@@ -144,67 +222,95 @@ class VoloBot:
                     time.sleep(2)
                 except NoSuchElementException:
                     logger.warning("Could not find volleyball link, trying direct URL")
-                    # You may need to set VOLO_VOLLEYBALL_URL in .env
                     volleyball_url = os.getenv('VOLO_VOLLEYBALL_URL')
                     if volleyball_url:
                         self.driver.get(volleyball_url)
                         time.sleep(2)
             
-            # Find and click signup button
-            # This will need to be customized based on the actual signup button
-            try:
-                # Try multiple selectors for signup button
-                signup_button = None
-                selectors = [
-                    (By.XPATH, "//button[contains(text(), 'Sign Up')]"),
-                    (By.XPATH, "//a[contains(text(), 'Sign Up')]"),
-                    (By.CSS_SELECTOR, "button[class*='signup'], a[class*='signup']"),
-                    (By.CSS_SELECTOR, "button[id*='signup'], a[id*='signup']"),
-                ]
-                
-                for selector_type, selector_value in selectors:
-                    try:
-                        signup_button = WebDriverWait(self.driver, 3).until(
-                            EC.element_to_be_clickable((selector_type, selector_value))
-                        )
-                        break
-                    except TimeoutException:
-                        continue
-                
-                if signup_button:
-                    signup_button.click()
-                    logger.info("Clicked signup button")
-                    time.sleep(2)
+            # Find matching pickups
+            matching_pickups = self.find_matching_pickups()
+            
+            if not matching_pickups:
+                logger.warning("No matching pickups found (must have 'Volleyball Pickup' in title and $0 total)")
+                return False
+            
+            # Sign up for each matching pickup
+            signed_up_count = 0
+            for pickup in matching_pickups:
+                try:
+                    logger.info(f"Attempting to sign up for pickup...")
                     
-                    # Confirm signup if needed
-                    try:
-                        confirm_selectors = [
-                            (By.XPATH, "//button[contains(text(), 'Confirm')]"),
-                            (By.CSS_SELECTOR, "button[class*='confirm']"),
-                        ]
-                        for selector_type, selector_value in confirm_selectors:
-                            try:
-                                confirm_button = WebDriverWait(self.driver, 3).until(
-                                    EC.element_to_be_clickable((selector_type, selector_value))
-                                )
-                                confirm_button.click()
-                                logger.info("Confirmed signup")
+                    # Try to find signup button within this pickup element
+                    signup_button = None
+                    selectors = [
+                        (By.XPATH, ".//button[contains(text(), 'Sign Up')]"),
+                        (By.XPATH, ".//a[contains(text(), 'Sign Up')]"),
+                        (By.XPATH, ".//button[contains(@class, 'signup')]"),
+                        (By.XPATH, ".//a[contains(@class, 'signup')]"),
+                        (By.XPATH, ".//button[contains(@id, 'signup')]"),
+                        (By.XPATH, ".//a[contains(@id, 'signup')]"),
+                    ]
+                    
+                    for selector_type, selector_value in selectors:
+                        try:
+                            signup_button = pickup.find_element(selector_type, selector_value)
+                            if signup_button and signup_button.is_displayed():
                                 break
-                            except TimeoutException:
-                                continue
-                        else:
-                            logger.info("No confirmation needed")
-                    except Exception as e:
-                        logger.info(f"No confirmation needed: {e}")
-                else:
-                    raise TimeoutException("Could not find signup button with any selector")
-                
-                logger.info("Successfully signed up for volleyball pickup!")
+                        except:
+                            continue
+                    
+                    # If not found within pickup, try clicking the pickup itself
+                    if not signup_button:
+                        try:
+                            pickup.click()
+                            time.sleep(2)
+                            # Now try to find signup button on the detail page
+                            signup_button = WebDriverWait(self.driver, 5).until(
+                                EC.element_to_be_clickable((By.XPATH, "//button[contains(text(), 'Sign Up')] | //a[contains(text(), 'Sign Up')]"))
+                            )
+                        except:
+                            logger.warning("Could not find signup button for this pickup")
+                            continue
+                    
+                    if signup_button:
+                        signup_button.click()
+                        logger.info("Clicked signup button")
+                        time.sleep(2)
+                        
+                        # Confirm signup if needed
+                        try:
+                            confirm_selectors = [
+                                (By.XPATH, "//button[contains(text(), 'Confirm')]"),
+                                (By.CSS_SELECTOR, "button[class*='confirm']"),
+                            ]
+                            for selector_type, selector_value in confirm_selectors:
+                                try:
+                                    confirm_button = WebDriverWait(self.driver, 3).until(
+                                        EC.element_to_be_clickable((selector_type, selector_value))
+                                    )
+                                    confirm_button.click()
+                                    logger.info("Confirmed signup")
+                                    break
+                                except TimeoutException:
+                                    continue
+                        except Exception as e:
+                            logger.info(f"No confirmation needed: {e}")
+                        
+                        signed_up_count += 1
+                        logger.info(f"Successfully signed up for pickup #{signed_up_count}!")
+                        
+                        # Go back if needed for next pickup
+                        time.sleep(1)
+                        
+                except Exception as e:
+                    logger.error(f"Error signing up for pickup: {e}")
+                    continue
+            
+            if signed_up_count > 0:
+                logger.info(f"Successfully signed up for {signed_up_count} matching pickup(s)!")
                 return True
-                
-            except TimeoutException:
-                logger.error("Could not find signup button")
-                # Take screenshot for debugging
+            else:
+                logger.warning("Found matching pickups but could not sign up for any")
                 self.driver.save_screenshot('signup_error.png')
                 return False
                 

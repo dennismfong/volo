@@ -2,13 +2,15 @@
 
 Automatically signs you up for Volo Sports volleyball pickups at 12:01am each day.
 
+**Smart Filtering:** Only signs up for pickups that:
+- Have "Volleyball Pickup" in the title
+- Have a $0 total cost (free)
+
 ## 🚀 Free Deployment (No Laptop Required!)
 
 **Don't want to keep your laptop running?** Deploy this bot for free using GitHub Actions!
 
 👉 **See [GITHUB_SETUP.md](GITHUB_SETUP.md) for quick setup instructions**
-
-Or check [DEPLOYMENT.md](DEPLOYMENT.md) for other free deployment options (PythonAnywhere, Render, Railway, etc.)
 
 ## Setup
 

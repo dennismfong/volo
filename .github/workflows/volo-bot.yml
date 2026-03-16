@@ -5,8 +5,9 @@ on:
     # Run at 12:01 AM UTC daily (adjust timezone offset as needed)
     # For PST (UTC-8): 12:01 AM PST = 8:01 AM UTC
     # For EST (UTC-5): 12:01 AM EST = 5:01 AM UTC
+    # Set ENABLE_SCHEDULE secret to "false" to disable scheduled runs
     - cron: '1 8 * * *'  # 12:01 AM PST / 8:01 AM UTC
-  workflow_dispatch:  # Allows manual triggering
+  workflow_dispatch:  # Allows manual triggering for testing
 
 jobs:
   signup:
@@ -14,24 +15,40 @@ jobs:
     timeout-minutes: 10
     
     steps:
+    - name: Check run mode
+      run: |
+        if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+          echo "🚀 Running immediately (manual trigger for testing)"
+        elif [ "${{ secrets.ENABLE_SCHEDULE }}" == "false" ]; then
+          echo "⏸️  Scheduled runs are disabled (ENABLE_SCHEDULE=false)"
+          exit 1
+        else
+          echo "⏰ Running on schedule (12:01 AM)"
+        fi
+    
     - name: Checkout code
+      if: success()
       uses: actions/checkout@v3
     
     - name: Set up Python
+      if: success()
       uses: actions/setup-python@v4
       with:
         python-version: '3.11'
     
     - name: Install Python dependencies
+      if: success()
       run: |
         pip install -r requirements.txt
     
     - name: Install Playwright browsers
+      if: success()
       run: |
         playwright install chromium
         playwright install-deps chromium
     
     - name: Run Volo Bot
+      if: success()
       env:
         VOLO_EMAIL: ${{ secrets.VOLO_EMAIL }}
         VOLO_PASSWORD: ${{ secrets.VOLO_PASSWORD }}

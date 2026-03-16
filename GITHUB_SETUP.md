@@ -81,6 +81,10 @@ Click **New repository secret** and add each of these:
    - Name: `VOLO_VOLLEYBALL_URL`
    - Value: Direct URL to volleyball pickups page (if you know it)
 
+   **Secret 5 (Optional - for testing):**
+   - Name: `ENABLE_SCHEDULE`
+   - Value: Set to `false` to disable scheduled runs (for testing). Leave empty or set to `true` to enable scheduled runs at 12:01 AM.
+
 ## Step 4: Adjust Timezone (If Needed)
 
 The workflow is set to run at **12:01 AM PST** (8:01 AM UTC).
@@ -98,10 +102,15 @@ To change the timezone:
 
 ## Step 5: Test It!
 
+You can test the bot immediately without waiting for 12:01 AM:
+
 1. Go to your repository → **Actions** tab
 2. You should see "Volo Sports Bot" workflow
-3. Click on it → **Run workflow** → **Run workflow**
-4. This will manually trigger the bot to test if it works
+3. Click on it → **Run workflow** button (top right) → **Run workflow**
+4. This will immediately trigger the bot to test if it works
+5. Click on the running workflow to see live logs
+
+**Note:** Manual runs work great for testing! The bot will still run automatically at 12:01 AM daily unless you set `ENABLE_SCHEDULE=false` secret.
 
 ## Step 6: Verify It's Scheduled
 
