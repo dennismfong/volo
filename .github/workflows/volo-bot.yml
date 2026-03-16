@@ -71,6 +71,7 @@ jobs:
     - name: Run Volo Bot
       if: success()
       env:
+        VOLO_COOKIE: ${{ secrets.VOLO_COOKIE }}
         VOLO_EMAIL: ${{ secrets.VOLO_EMAIL }}
         VOLO_PASSWORD: ${{ secrets.VOLO_PASSWORD }}
         VOLO_URL: ${{ secrets.VOLO_URL || 'https://www.volosports.com' }}

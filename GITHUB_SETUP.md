@@ -66,28 +66,32 @@ There are a few ways to access secrets. Try these:
 Click **New repository secret** and add each of these:
 
    **Secret 1:**
-   - Name: `VOLO_EMAIL`
+   - Name: `VOLO_COOKIE` (optional - if set, skips login step)
+     - Value: Your session cookie string (format: `name=value; name2=value2`)
+     - **Note:** If you provide `VOLO_COOKIE`, you don't need `VOLO_EMAIL` and `VOLO_PASSWORD`
+     - **How to get:** Log into Volo Sports in your browser, open DevTools (F12), go to Application/Storage → Cookies, copy the cookie string
+   - Name: `VOLO_EMAIL` (required if VOLO_COOKIE not set)
    - Value: Your Volo Sports email address
 
    **Secret 2:**
    - Name: `VOLO_PASSWORD`
    - Value: Your Volo Sports password
 
-   **Secret 3 (Optional):**
+   **Secret 4 (Optional):**
    - Name: `VOLO_URL`
    - Value: `https://www.volosports.com` (or your specific URL)
 
-   **Secret 4 (Optional):**
+   **Secret 5 (Optional):**
    - Name: `VOLO_VOLLEYBALL_URL`
    - Value: Direct URL to volleyball pickups page. Defaults to San Francisco volleyball pickups if not set.
      - Default: `https://www.volosports.com/discover?cityName=San%20Francisco&subView=DAILY&view=SPORTS&sportNames%5B0%5D=Volleyball`
      - For other cities, update the `cityName` parameter in the URL
 
-   **Secret 5 (Optional - for testing):**
+   **Secret 6 (Optional - for testing):**
    - Name: `ENABLE_SCHEDULE`
    - Value: Set to `false` to disable scheduled runs (for testing). Leave empty or set to `true` to enable scheduled runs at 12:01 AM.
 
-   **Secret 6 (Optional - for testing):**
+   **Secret 7 (Optional - for testing):**
    - Name: `SEARCH_ONLY`
    - Value: Set to `true` to enable search-only mode. The bot will find and log valid pickups but **will NOT actually sign up**. Useful for testing to see what the bot would sign up for without actually doing it. Leave empty or set to `false` for normal operation.
 

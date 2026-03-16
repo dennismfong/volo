@@ -30,6 +30,9 @@ class VoloBot:
     def __init__(self):
         self.email = os.getenv('VOLO_EMAIL')
         self.password = os.getenv('VOLO_PASSWORD')
+        # Get cookie from env - if provided, can skip login
+        self.cookie = os.getenv('VOLO_COOKIE', '').strip()
+        
         # Get URL from env, default to volosports.com if not set or empty
         volo_url_env = os.getenv('VOLO_URL', '').strip()
         self.volo_url = volo_url_env if volo_url_env else 'https://www.volosports.com'
@@ -38,8 +41,12 @@ class VoloBot:
         search_only_env = os.getenv('SEARCH_ONLY', '').strip().lower()
         self.search_only = search_only_env in ('true', '1', 'yes', 'on')
         
-        if not self.email or not self.password:
-            raise ValueError("VOLO_EMAIL and VOLO_PASSWORD must be set")
+        # Validate: need either cookie OR email/password
+        if not self.cookie:
+            if not self.email or not self.password:
+                raise ValueError("Either VOLO_COOKIE must be set, or both VOLO_EMAIL and VOLO_PASSWORD must be set")
+        else:
+            logger.info("🍪 Cookie provided - will skip login step")
         
         if not self.volo_url:
             raise ValueError("VOLO_URL must be set or default will be used")
@@ -47,9 +54,85 @@ class VoloBot:
         if self.search_only:
             logger.info("🔍 SEARCH ONLY MODE: Will find pickups but NOT sign up")
     
-    def login(self, page):
-        """Login to Volo Sports"""
+    def set_cookie_from_string(self, page, cookie_string):
+        """Set cookies from a cookie string (format: 'name=value; name2=value2')"""
         try:
+            import re
+            from urllib.parse import urlparse
+            
+            # Parse cookie string
+            cookies = []
+            cookie_parts = cookie_string.split(';')
+            
+            for part in cookie_parts:
+                part = part.strip()
+                if '=' in part:
+                    name, value = part.split('=', 1)
+                    name = name.strip()
+                    value = value.strip()
+                    
+                    # Create cookie object for Playwright
+                    cookie = {
+                        'name': name,
+                        'value': value,
+                        'domain': '.volosports.com',  # Use wildcard domain
+                        'path': '/',
+                    }
+                    cookies.append(cookie)
+            
+            if cookies:
+                # Navigate to the domain first to set cookies
+                page.goto('https://www.volosports.com', wait_until='domcontentloaded')
+                page.context.add_cookies(cookies)
+                logger.info(f"✅ Set {len(cookies)} cookie(s) from VOLO_COOKIE")
+                return True
+            else:
+                logger.warning("No valid cookies found in VOLO_COOKIE")
+                return False
+        except Exception as e:
+            logger.error(f"Error setting cookies: {e}")
+            return False
+    
+    def login(self, page):
+        """Login to Volo Sports - uses cookie if available, otherwise uses email/password"""
+        # If cookie is provided, use it instead of logging in
+        if self.cookie:
+            logger.info("=" * 60)
+            logger.info("STEP 1: USING COOKIE (SKIPPING LOGIN)")
+            logger.info("=" * 60)
+            
+            if self.set_cookie_from_string(page, self.cookie):
+                # Verify cookie works by navigating to a protected page
+                try:
+                    page.goto('https://www.volosports.com/app/dashboard', wait_until='domcontentloaded', timeout=10000)
+                    current_url = page.url
+                    
+                    # Check if we're logged in (not redirected to login)
+                    if "login" not in current_url.lower():
+                        logger.info(f"✅ Cookie authentication successful - on: {current_url}")
+                        return True
+                    else:
+                        logger.warning("Cookie may be invalid - redirected to login page")
+                        logger.info("Falling back to email/password login...")
+                        # Fall through to email/password login
+                except Exception as e:
+                    logger.warning(f"Error verifying cookie: {e}")
+                    logger.info("Falling back to email/password login...")
+                    # Fall through to email/password login
+            else:
+                logger.warning("Failed to set cookie, falling back to email/password login...")
+                # Fall through to email/password login
+        
+        # Email/password login (original method)
+        if not self.email or not self.password:
+            logger.error("No cookie provided and no email/password available")
+            return False
+        
+        try:
+            logger.info("=" * 60)
+            logger.info("STEP 1: LOGGING IN")
+            logger.info("=" * 60)
+            
             # Navigate directly to login page
             login_url = 'https://www.volosports.com/login'
             logger.info(f"Navigating to login page: {login_url}")
@@ -213,6 +296,10 @@ class VoloBot:
                     pass
                 page.screenshot(path='login_failed.png')
                 logger.error("❌ Login failed - still on login page")
+                return False
+            except Exception as e:
+                logger.error(f"Error during login verification: {e}")
+                page.screenshot(path='login_verification_error.png')
                 return False
                 
         except Exception as e:
@@ -1037,19 +1124,19 @@ class VoloBot:
                 page = context.new_page()
                 
                 try:
-                    logger.info("=" * 60)
-                    logger.info("STEP 1: LOGGING IN")
-                    logger.info("=" * 60)
                     login_success = self.login(page)
                     
                     if not login_success:
-                        logger.error("❌ Login failed - stopping execution")
-                        logger.error("Please check your VOLO_EMAIL and VOLO_PASSWORD secrets")
+                        logger.error("❌ Login/Authentication failed - stopping execution")
+                        if self.cookie:
+                            logger.error("Please check your VOLO_COOKIE secret")
+                        else:
+                            logger.error("Please check your VOLO_EMAIL and VOLO_PASSWORD secrets")
                         page.screenshot(path='login_failed_final.png')
                         return
                     
                     logger.info("=" * 60)
-                    logger.info("✅ LOGIN SUCCESSFUL!")
+                    logger.info("✅ AUTHENTICATION SUCCESSFUL!")
                     logger.info("=" * 60)
                     logger.info("STEP 2: FINDING PICKUPS")
                     logger.info("=" * 60)
