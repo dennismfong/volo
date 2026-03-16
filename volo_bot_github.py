@@ -838,17 +838,34 @@ class VoloBot:
             
             # Sign up for each matching pickup
             signed_up_count = 0
-            for pickup in matching_pickups:
+            for pickup_index, pickup in enumerate(matching_pickups):
                 try:
-                    logger.info(f"Attempting to sign up for pickup...")
+                    logger.info(f"Attempting to sign up for pickup {pickup_index + 1}/{len(matching_pickups)}...")
                     
                     # Click on the pickup card/event to go to detail page
                     try:
                         logger.info("Clicking on event to view details...")
+                        # Scroll into view first
+                        pickup.scroll_into_view_if_needed()
+                        page.wait_for_timeout(500)
                         pickup.click()
                         page.wait_for_timeout(3000)  # Wait for detail page to load
                     except Exception as e:
                         logger.warning(f"Could not click pickup: {e}")
+                        # If element is detached, try to navigate back and re-find pickups
+                        if "not attached" in str(e).lower() or "detached" in str(e).lower():
+                            logger.info("Element detached, navigating back to pickups page...")
+                            try:
+                                page.go_back()
+                                page.wait_for_timeout(2000)
+                                # Re-find matching pickups
+                                matching_pickups = self.find_matching_pickups(page)
+                                if not matching_pickups:
+                                    logger.warning("No matching pickups found after navigating back")
+                                    break
+                                logger.info(f"Re-found {len(matching_pickups)} matching pickups")
+                            except:
+                                pass
                         continue
                     
                     # SECOND CHECK: Verify "Order Total" is $0.00 on the detail page
@@ -858,20 +875,22 @@ class VoloBot:
                     
                     try:
                         # Get the page text and search for "Order Total"
-                        page_text = page.inner_text()
+                        # Use body element to get all text
+                        page_text = page.locator('body').inner_text()
                         import re
                         
                         # Look for "Order Total" followed by a price
-                        # Pattern: "Order Total" (optional text/whitespace) then $X.XX or $X
-                        order_total_pattern = r'order\s+total[^\$]*(\$[\d.]+)'
+                        # Pattern: "Order Total" (optional colon/whitespace) then $X.XX or $X
+                        order_total_pattern = r'order\s+total\s*:?\s*(\$[\d.]+)'
                         match = re.search(order_total_pattern, page_text, re.IGNORECASE)
                         
                         if match:
                             price_found = match.group(1)
                             logger.info(f"Found Order Total: {price_found}")
                             
-                            # Check if it's $0.00
-                            if price_found in ['$0', '$0.00', '$0.0']:
+                            # Check if it's $0.00 (normalize formats)
+                            price_normalized = price_found.replace('.00', '').replace('.0', '')
+                            if price_normalized == '$0':
                                 order_total_is_zero = True
                                 logger.info("✓ Order Total is $0.00 - verified!")
                             else:
@@ -879,9 +898,30 @@ class VoloBot:
                                 logger.info(f"✗ Order Total is NOT $0.00: {price_found}")
                         else:
                             # Order Total text not found - might be in different format
-                            # Check if there's any price near "total" text
-                            total_pattern = r'total[^\$]*(\$[\d.]+)'
-                            total_match = re.search(total_pattern, page_text, re.IGNORECASE)
+                            # Try alternative patterns
+                            total_patterns = [
+                                r'total\s*:?\s*(\$[\d.]+)',
+                                r'order\s+total[^\$]*(\$[\d.]+)',
+                            ]
+                            match = None
+                            for pattern in total_patterns:
+                                match = re.search(pattern, page_text, re.IGNORECASE)
+                                if match:
+                                    break
+                            
+                            if match:
+                                price_found = match.group(1)
+                                price_normalized = price_found.replace('.00', '').replace('.0', '')
+                                if price_normalized == '$0':
+                                    order_total_is_zero = True
+                                    logger.info(f"✓ Order Total is $0.00 - verified! (found via alternative pattern)")
+                                else:
+                                    order_total_is_zero = False
+                                    logger.info(f"✗ Order Total is NOT $0.00: {price_found}")
+                            else:
+                                # Could not find Order Total - log warning but continue
+                                logger.warning("Could not find 'Order Total' on page, assuming it's $0.00 (passed initial check)")
+                                order_total_is_zero = True  # Assume it's free since it passed initial check
                             
                             if total_match:
                                 price_found = total_match.group(1)
@@ -934,27 +974,12 @@ class VoloBot:
                     # 3. Click Register button
                     
                     try:
-                        # Find and check the checkboxes
+                        # Find and check the waiver/agreement checkboxes
                         logger.info("Looking for waiver/agreement checkboxes...")
                         
-                        # Try multiple selectors for checkboxes
-                        checkbox_selectors = [
-                            "input[type='checkbox']",
-                            "input[type='checkbox']:not(:checked)",
-                            "[class*='checkbox'] input",
-                            "[class*='waiver'] input[type='checkbox']",
-                            "[class*='agreement'] input[type='checkbox']",
-                        ]
-                        
-                        checkboxes = []
-                        for selector in checkbox_selectors:
-                            try:
-                                checkboxes = page.query_selector_all(selector)
-                                if checkboxes:
-                                    logger.info(f"Found {len(checkboxes)} checkbox(es) using selector: {selector}")
-                                    break
-                            except:
-                                continue
+                        # Find all checkboxes on the page
+                        checkboxes = page.query_selector_all("input[type='checkbox']")
+                        logger.info(f"Found {len(checkboxes)} total checkbox(es) on page")
                         
                         # Filter to only unchecked checkboxes
                         unchecked_checkboxes = []
@@ -965,28 +990,38 @@ class VoloBot:
                             except:
                                 pass
                         
+                        logger.info(f"Found {len(unchecked_checkboxes)} unchecked checkbox(es)")
+                        
+                        # We need exactly 2 checkboxes (waiver/agreement)
                         if len(unchecked_checkboxes) >= 2:
-                            logger.info(f"Found {len(unchecked_checkboxes)} unchecked checkbox(es), checking them...")
+                            logger.info(f"Checking {len(unchecked_checkboxes)} unchecked checkbox(es)...")
                             for i, checkbox in enumerate(unchecked_checkboxes[:2], 1):  # Check first 2
                                 try:
-                                    checkbox.check()
-                                    logger.info(f"✓ Checked checkbox {i}")
+                                    # Scroll checkbox into view first
+                                    checkbox.scroll_into_view_if_needed()
+                                    page.wait_for_timeout(300)
+                                    # Use click for better reliability
+                                    checkbox.click()
+                                    logger.info(f"✓ Checked checkbox {i}/2")
                                     page.wait_for_timeout(500)  # Small delay between checks
                                 except Exception as e:
                                     logger.warning(f"Could not check checkbox {i}: {e}")
                         elif len(unchecked_checkboxes) == 1:
                             logger.info("Found 1 unchecked checkbox, checking it...")
                             try:
-                                unchecked_checkboxes[0].check()
+                                unchecked_checkboxes[0].scroll_into_view_if_needed()
+                                page.wait_for_timeout(300)
+                                unchecked_checkboxes[0].click()
                                 logger.info("✓ Checked checkbox")
                                 page.wait_for_timeout(500)
                             except Exception as e:
                                 logger.warning(f"Could not check checkbox: {e}")
                         else:
-                            logger.warning(f"Expected 2 checkboxes but found {len(unchecked_checkboxes)} unchecked ones")
+                            logger.warning(f"Expected at least 1-2 checkboxes but found {len(unchecked_checkboxes)} unchecked ones")
                         
-                        # Wait a moment for Register button to become enabled
-                        page.wait_for_timeout(1000)
+                        # Wait for Register button to become enabled after checking boxes
+                        logger.info("Waiting for Register button to become enabled...")
+                        page.wait_for_timeout(1500)  # Give time for button to enable
                         
                         # Now find and click the Register button
                         logger.info("Looking for Register button...")
@@ -1021,6 +1056,12 @@ class VoloBot:
                                 continue
                         
                         if register_button:
+                            # Scroll button into view if not already
+                            try:
+                                register_button.scroll_into_view_if_needed()
+                                page.wait_for_timeout(300)
+                            except:
+                                pass
                             register_button.click()
                             logger.info("✓ Clicked Register button")
                             page.wait_for_timeout(2000)
