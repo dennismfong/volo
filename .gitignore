@@ -1,0 +1,33 @@
+# Environment variables
+.env
+
+# Logs
+*.log
+volo_bot.log
+cron.log
+launchd.log
+launchd.error.log
+
+# Screenshots
+*.png
+signup_error.png
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
