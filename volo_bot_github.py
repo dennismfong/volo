@@ -57,40 +57,53 @@ class VoloBot:
     def set_cookie_from_string(self, page, cookie_string):
         """Set cookies from a cookie string (format: 'name=value; name2=value2')"""
         try:
-            import re
-            from urllib.parse import urlparse
+            if not cookie_string or not cookie_string.strip():
+                logger.warning("VOLO_COOKIE is empty")
+                return False
             
             # Parse cookie string
             cookies = []
             cookie_parts = cookie_string.split(';')
             
+            logger.debug(f"Parsing cookie string with {len(cookie_parts)} parts")
+            
             for part in cookie_parts:
                 part = part.strip()
+                if not part:  # Skip empty parts
+                    continue
+                    
                 if '=' in part:
                     name, value = part.split('=', 1)
                     name = name.strip()
                     value = value.strip()
                     
-                    # Create cookie object for Playwright
-                    cookie = {
-                        'name': name,
-                        'value': value,
-                        'domain': '.volosports.com',  # Use wildcard domain
-                        'path': '/',
-                    }
-                    cookies.append(cookie)
+                    if name and value:  # Both must be non-empty
+                        # Create cookie object for Playwright
+                        cookie = {
+                            'name': name,
+                            'value': value,
+                            'domain': '.volosports.com',  # Use wildcard domain
+                            'path': '/',
+                        }
+                        cookies.append(cookie)
+                        logger.debug(f"  Parsed cookie: {name}=...")
+                else:
+                    logger.debug(f"  Skipping invalid cookie part: {part[:50]}")
             
             if cookies:
                 # Navigate to the domain first to set cookies
-                page.goto('https://www.volosports.com', wait_until='domcontentloaded')
+                logger.info(f"Setting {len(cookies)} cookie(s)...")
+                page.goto('https://www.volosports.com', wait_until='domcontentloaded', timeout=15000)
                 page.context.add_cookies(cookies)
                 logger.info(f"✅ Set {len(cookies)} cookie(s) from VOLO_COOKIE")
                 return True
             else:
-                logger.warning("No valid cookies found in VOLO_COOKIE")
+                logger.warning("No valid cookies found in VOLO_COOKIE (no name=value pairs found)")
+                logger.debug(f"Cookie string sample: {cookie_string[:100]}")
                 return False
         except Exception as e:
             logger.error(f"Error setting cookies: {e}")
+            logger.debug(f"Cookie string that failed: {cookie_string[:100] if cookie_string else 'None'}")
             return False
     
     def login(self, page):
@@ -136,8 +149,18 @@ class VoloBot:
             # Navigate directly to login page
             login_url = 'https://www.volosports.com/login'
             logger.info(f"Navigating to login page: {login_url}")
-            page.goto(login_url, wait_until='networkidle')
-            page.wait_for_timeout(2000)
+            try:
+                page.goto(login_url, wait_until='domcontentloaded', timeout=15000)
+                page.wait_for_timeout(2000)
+            except Exception as e:
+                logger.error(f"Failed to navigate to login page: {e}")
+                # Try with networkidle as fallback
+                try:
+                    page.goto(login_url, wait_until='networkidle', timeout=15000)
+                    page.wait_for_timeout(2000)
+                except Exception as e2:
+                    logger.error(f"Failed to navigate to login page (fallback): {e2}")
+                    return False
             
             # Wait for login form to load
             logger.info("Waiting for login form...")
