@@ -150,44 +150,70 @@ class VoloBot:
             
             # Wait for navigation after login
             logger.info("Waiting for login to complete...")
-            page.wait_for_timeout(3000)
             
             # Wait for URL to change away from login page
+            # Use multiple strategies to detect successful login
+            login_successful = False
+            max_wait_time = 20000  # 20 seconds total
+            start_time = page.evaluate("Date.now()")
+            
             try:
-                # Wait up to 10 seconds for URL to change
-                page.wait_for_function(
-                    "window.location.href.indexOf('login') === -1",
-                    timeout=10000
-                )
-                current_url = page.url
-                logger.info(f"✅ Login successful - redirected to: {current_url}")
-                return True
-            except:
-                # Check current URL
+                # Strategy 1: Wait for navigation event
+                try:
+                    with page.expect_navigation(timeout=15000, wait_until="domcontentloaded"):
+                        pass  # Navigation should happen after click
+                    current_url = page.url
+                    if "login" not in current_url.lower():
+                        logger.info(f"✅ Login successful - navigated to: {current_url}")
+                        login_successful = True
+                except:
+                    pass
+                
+                # Strategy 2: Poll for URL change
+                if not login_successful:
+                    for attempt in range(20):  # Check every 1 second for 20 seconds
+                        page.wait_for_timeout(1000)
+                        current_url = page.url
+                        if "login" not in current_url.lower():
+                            logger.info(f"✅ Login successful - URL changed to: {current_url}")
+                            login_successful = True
+                            break
+                        # Check if we're on dashboard/app page
+                        if "dashboard" in current_url.lower() or "app" in current_url.lower():
+                            logger.info(f"✅ Login successful - on dashboard/app: {current_url}")
+                            login_successful = True
+                            break
+                
+                if login_successful:
+                    return True
+                
+                # If still not successful, check current state
                 current_url = page.url
                 logger.info(f"Current URL after login attempt: {current_url}")
                 
+                # Final check - maybe we're already logged in
                 if "login" not in current_url.lower():
                     logger.info("✅ Login successful - not on login page")
                     return True
-                else:
-                    logger.warning("Still on login page, checking for errors...")
-                    # Check for error messages
-                    try:
-                        error_elements = page.query_selector_all("text=/error|invalid|incorrect|wrong/i")
-                        if error_elements:
-                            for elem in error_elements[:3]:  # Check first 3 error elements
-                                try:
-                                    error_text = elem.inner_text()
-                                    if error_text:
-                                        logger.error(f"Login error detected: {error_text}")
-                                except:
-                                    pass
-                    except:
-                        pass
-                    page.screenshot(path='login_failed.png')
-                    logger.error("❌ Login failed - still on login page")
-                    return False
+                
+                # Still on login page, check for errors
+                logger.warning("Still on login page, checking for errors...")
+                # Check for error messages
+                try:
+                    error_elements = page.query_selector_all("text=/error|invalid|incorrect|wrong/i")
+                    if error_elements:
+                        for elem in error_elements[:3]:  # Check first 3 error elements
+                            try:
+                                error_text = elem.inner_text()
+                                if error_text:
+                                    logger.error(f"Login error detected: {error_text}")
+                            except:
+                                pass
+                except:
+                    pass
+                page.screenshot(path='login_failed.png')
+                logger.error("❌ Login failed - still on login page")
+                return False
                 
         except Exception as e:
             logger.error(f"Login failed: {e}")
