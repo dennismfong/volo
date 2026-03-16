@@ -875,18 +875,16 @@ class VoloBot:
                         page.wait_for_timeout(3000)  # Wait for detail page to load
                     except Exception as e:
                         logger.warning(f"Could not click pickup: {e}")
-                        # If element is detached, try to navigate back and re-find pickups
+                        # If element is detached, we're likely already on a detail page
+                        # Just skip this pickup and continue (don't re-search unnecessarily)
                         if "not attached" in str(e).lower() or "detached" in str(e).lower():
-                            logger.info("Element detached, navigating back to pickups page...")
+                            logger.info("Element detached - likely already on detail page, skipping this pickup")
+                            # Try to go back if we're on a detail page
                             try:
-                                page.go_back()
-                                page.wait_for_timeout(2000)
-                                # Re-find matching pickups
-                                matching_pickups = self.find_matching_pickups(page)
-                                if not matching_pickups:
-                                    logger.warning("No matching pickups found after navigating back")
-                                    break
-                                logger.info(f"Re-found {len(matching_pickups)} matching pickups")
+                                current_url = page.url
+                                if "event" in current_url.lower() or "pickup" in current_url.lower():
+                                    page.go_back()
+                                    page.wait_for_timeout(1000)
                             except:
                                 pass
                         continue
@@ -1000,25 +998,69 @@ class VoloBot:
                         # Find and check the waiver/agreement checkboxes
                         logger.info("Looking for waiver/agreement checkboxes...")
                         
-                        # Find all checkboxes on the page
-                        checkboxes = page.query_selector_all("input[type='checkbox']")
-                        logger.info(f"Found {len(checkboxes)} total checkbox(es) on page")
+                        # Try to find checkboxes within waiver/agreement sections first
+                        # Look for checkboxes near text containing "waiver", "agreement", "liability", etc.
+                        waiver_checkboxes = []
                         
-                        # Filter to only unchecked checkboxes
-                        unchecked_checkboxes = []
-                        for checkbox in checkboxes:
-                            try:
-                                if not checkbox.is_checked():
-                                    unchecked_checkboxes.append(checkbox)
-                            except:
-                                pass
+                        # Strategy 1: Find checkboxes near waiver-related text using locators
+                        try:
+                            # Find all checkboxes first
+                            all_checkboxes = page.query_selector_all("input[type='checkbox']")
+                            
+                            # For each checkbox, check if it's near waiver text
+                            for checkbox in all_checkboxes:
+                                try:
+                                    if checkbox.is_checked():
+                                        continue
+                                    
+                                    # Get the checkbox's parent container text
+                                    # Use evaluate to check if parent contains waiver text
+                                    is_waiver_checkbox = checkbox.evaluate("""
+                                        el => {
+                                            // Walk up to find parent with text
+                                            let current = el;
+                                            for (let i = 0; i < 5; i++) {
+                                                if (!current || !current.parentElement) break;
+                                                current = current.parentElement;
+                                                const text = (current.innerText || '').toLowerCase();
+                                                // Check if this container has waiver-related text
+                                                if (text.includes('waiver') || text.includes('agreement') || 
+                                                    text.includes('liability') || text.includes('code of conduct') ||
+                                                    text.includes('player code')) {
+                                                    return true;
+                                                }
+                                            }
+                                            return false;
+                                        }
+                                    """)
+                                    
+                                    if is_waiver_checkbox:
+                                        waiver_checkboxes.append(checkbox)
+                                        if len(waiver_checkboxes) >= 2:
+                                            break
+                                except:
+                                    pass
+                        except:
+                            pass
                         
-                        logger.info(f"Found {len(unchecked_checkboxes)} unchecked checkbox(es)")
+                        # Strategy 2: Fallback - if still not enough, use first 2 unchecked checkboxes
+                        if len(waiver_checkboxes) < 2:
+                            all_checkboxes = page.query_selector_all("input[type='checkbox']")
+                            for checkbox in all_checkboxes:
+                                try:
+                                    if not checkbox.is_checked() and checkbox not in waiver_checkboxes:
+                                        waiver_checkboxes.append(checkbox)
+                                        if len(waiver_checkboxes) >= 2:
+                                            break
+                                except:
+                                    pass
+                        
+                        logger.info(f"Found {len(waiver_checkboxes)} waiver/agreement checkbox(es)")
                         
                         # We need exactly 2 checkboxes (waiver/agreement)
-                        if len(unchecked_checkboxes) >= 2:
-                            logger.info(f"Checking {len(unchecked_checkboxes)} unchecked checkbox(es)...")
-                            for i, checkbox in enumerate(unchecked_checkboxes[:2], 1):  # Check first 2
+                        if len(waiver_checkboxes) >= 2:
+                            logger.info(f"Checking {len(waiver_checkboxes)} waiver checkbox(es)...")
+                            for i, checkbox in enumerate(waiver_checkboxes[:2], 1):  # Check first 2
                                 try:
                                     # Scroll checkbox into view first
                                     checkbox.scroll_into_view_if_needed()
@@ -1029,18 +1071,18 @@ class VoloBot:
                                     page.wait_for_timeout(500)  # Small delay between checks
                                 except Exception as e:
                                     logger.warning(f"Could not check checkbox {i}: {e}")
-                        elif len(unchecked_checkboxes) == 1:
-                            logger.info("Found 1 unchecked checkbox, checking it...")
+                        elif len(waiver_checkboxes) == 1:
+                            logger.info("Found 1 waiver checkbox, checking it...")
                             try:
-                                unchecked_checkboxes[0].scroll_into_view_if_needed()
+                                waiver_checkboxes[0].scroll_into_view_if_needed()
                                 page.wait_for_timeout(300)
-                                unchecked_checkboxes[0].click()
+                                waiver_checkboxes[0].click()
                                 logger.info("✓ Checked checkbox")
                                 page.wait_for_timeout(500)
                             except Exception as e:
                                 logger.warning(f"Could not check checkbox: {e}")
                         else:
-                            logger.warning(f"Expected at least 1-2 checkboxes but found {len(unchecked_checkboxes)} unchecked ones")
+                            logger.warning(f"Expected 1-2 waiver checkboxes but found {len(waiver_checkboxes)}")
                         
                         # Wait for Register button to become enabled after checking boxes
                         logger.info("Waiting for Register button to become enabled...")
