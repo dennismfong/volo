@@ -87,6 +87,10 @@ Click **New repository secret** and add each of these:
    - Name: `ENABLE_SCHEDULE`
    - Value: Set to `false` to disable scheduled runs (for testing). Leave empty or set to `true` to enable scheduled runs at 12:01 AM.
 
+   **Secret 6 (Optional - for testing):**
+   - Name: `SEARCH_ONLY`
+   - Value: Set to `true` to enable search-only mode. The bot will find and log valid pickups but **will NOT actually sign up**. Useful for testing to see what the bot would sign up for without actually doing it. Leave empty or set to `false` for normal operation.
+
 ## Step 4: Adjust Timezone (If Needed)
 
 The workflow is set to run at **12:01 AM PST** (8:01 AM UTC).

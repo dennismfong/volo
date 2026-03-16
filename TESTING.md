@@ -2,6 +2,23 @@
 
 Since you can't test locally, here's how to test using GitHub Actions:
 
+## Search-Only Mode (Recommended for Testing)
+
+**Best way to test without actually signing up:**
+
+1. Go to **Settings** → **Secrets and variables** → **Actions**
+2. Add a new secret:
+   - Name: `SEARCH_ONLY`
+   - Value: `true`
+3. Run the workflow manually
+4. The bot will:
+   - ✅ Log in to Volo Sports
+   - ✅ Find all matching pickups
+   - ✅ Log which pickups it would sign up for
+   - ❌ **NOT actually sign up** (safe for testing!)
+
+This lets you verify the bot is finding the right events without actually registering.
+
 ## Quick Test (Manual Run)
 
 1. Go to your repository on GitHub

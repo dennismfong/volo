@@ -34,11 +34,18 @@ class VoloBot:
         volo_url_env = os.getenv('VOLO_URL', '').strip()
         self.volo_url = volo_url_env if volo_url_env else 'https://www.volosports.com'
         
+        # Search only mode - finds pickups but doesn't sign up
+        search_only_env = os.getenv('SEARCH_ONLY', '').strip().lower()
+        self.search_only = search_only_env in ('true', '1', 'yes', 'on')
+        
         if not self.email or not self.password:
             raise ValueError("VOLO_EMAIL and VOLO_PASSWORD must be set")
         
         if not self.volo_url:
             raise ValueError("VOLO_URL must be set or default will be used")
+        
+        if self.search_only:
+            logger.info("🔍 SEARCH ONLY MODE: Will find pickups but NOT sign up")
     
     def login(self, page):
         """Login to Volo Sports"""
@@ -265,6 +272,23 @@ class VoloBot:
             if not matching_pickups:
                 logger.warning("No matching pickups found (must have 'Volleyball Pickup' in title and $0 total)")
                 return False
+            
+            # Log what we found
+            logger.info("=" * 60)
+            logger.info(f"Found {len(matching_pickups)} matching pickup(s) for signup:")
+            for i, pickup in enumerate(matching_pickups, 1):
+                try:
+                    pickup_text = pickup.inner_text()[:200] if pickup.inner_text() else "N/A"
+                    logger.info(f"  {i}. {pickup_text}")
+                except:
+                    logger.info(f"  {i}. [Could not extract text]")
+            logger.info("=" * 60)
+            
+            # If search only mode, just log and return
+            if self.search_only:
+                logger.info("🔍 SEARCH ONLY MODE: Skipping actual signup")
+                logger.info(f"Would sign up for {len(matching_pickups)} pickup(s) if not in search-only mode")
+                return True
             
             # Sign up for each matching pickup
             signed_up_count = 0

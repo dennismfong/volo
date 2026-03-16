@@ -75,6 +75,7 @@ jobs:
         VOLO_PASSWORD: ${{ secrets.VOLO_PASSWORD }}
         VOLO_URL: ${{ secrets.VOLO_URL || 'https://www.volosports.com' }}
         VOLO_VOLLEYBALL_URL: ${{ secrets.VOLO_VOLLEYBALL_URL || 'https://www.volosports.com/discover?cityName=San%20Francisco&subView=DAILY&view=SPORTS&sportNames%5B0%5D=Volleyball' }}
+        SEARCH_ONLY: ${{ secrets.SEARCH_ONLY }}
       run: |
         python3 volo_bot_github.py
     
