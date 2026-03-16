@@ -79,7 +79,9 @@ Click **New repository secret** and add each of these:
 
    **Secret 4 (Optional):**
    - Name: `VOLO_VOLLEYBALL_URL`
-   - Value: Direct URL to volleyball pickups page (if you know it)
+   - Value: Direct URL to volleyball pickups page. Defaults to San Francisco volleyball pickups if not set.
+     - Default: `https://www.volosports.com/discover?cityName=San%20Francisco&subView=DAILY&view=SPORTS&sportNames%5B0%5D=Volleyball`
+     - For other cities, update the `cityName` parameter in the URL
 
    **Secret 5 (Optional - for testing):**
    - Name: `ENABLE_SCHEDULE`

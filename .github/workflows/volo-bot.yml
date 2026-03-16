@@ -73,8 +73,8 @@ jobs:
       env:
         VOLO_EMAIL: ${{ secrets.VOLO_EMAIL }}
         VOLO_PASSWORD: ${{ secrets.VOLO_PASSWORD }}
-        VOLO_URL: ${{ secrets.VOLO_URL }}
-        VOLO_VOLLEYBALL_URL: ${{ secrets.VOLO_VOLLEYBALL_URL }}
+        VOLO_URL: ${{ secrets.VOLO_URL || 'https://www.volosports.com' }}
+        VOLO_VOLLEYBALL_URL: ${{ secrets.VOLO_VOLLEYBALL_URL || 'https://www.volosports.com/discover?cityName=San%20Francisco&subView=DAILY&view=SPORTS&sportNames%5B0%5D=Volleyball' }}
       run: |
         python3 volo_bot_github.py
     

@@ -30,14 +30,22 @@ class VoloBot:
     def __init__(self):
         self.email = os.getenv('VOLO_EMAIL')
         self.password = os.getenv('VOLO_PASSWORD')
-        self.volo_url = os.getenv('VOLO_URL', 'https://www.volosports.com')
+        # Get URL from env, default to volosports.com if not set or empty
+        volo_url_env = os.getenv('VOLO_URL', '').strip()
+        self.volo_url = volo_url_env if volo_url_env else 'https://www.volosports.com'
         
         if not self.email or not self.password:
             raise ValueError("VOLO_EMAIL and VOLO_PASSWORD must be set")
+        
+        if not self.volo_url:
+            raise ValueError("VOLO_URL must be set or default will be used")
     
     def login(self, page):
         """Login to Volo Sports"""
         try:
+            if not self.volo_url or not self.volo_url.startswith('http'):
+                raise ValueError(f"Invalid URL: {self.volo_url}. Please set VOLO_URL secret to a valid URL (e.g., https://www.volosports.com)")
+            
             logger.info(f"Navigating to {self.volo_url}")
             page.goto(self.volo_url, wait_until='networkidle')
             
@@ -87,15 +95,20 @@ class VoloBot:
         """Find all pickup events and filter for 'Volleyball Pickup' with $0 total"""
         try:
             logger.info("Searching for pickup events...")
-            page.wait_for_timeout(2000)  # Wait for page to load
+            page.wait_for_timeout(3000)  # Wait for page to load
             
             # Find all pickup/event cards/items
+            # Try multiple selectors that might match the Volo Sports page structure
             pickup_selectors = [
                 "div[class*='event']",
                 "div[class*='pickup']",
                 "div[class*='card']",
                 "article",
                 "li[class*='event']",
+                "[data-testid*='event']",
+                "[data-testid*='pickup']",
+                "a[href*='/event']",
+                "a[href*='/pickup']",
             ]
             
             matching_pickups = []
@@ -104,14 +117,29 @@ class VoloBot:
             for selector in pickup_selectors:
                 try:
                     events = page.query_selector_all(selector)
-                    if events:
+                    if events and len(events) > 0:
                         logger.info(f"Found {len(events)} potential events using selector: {selector}")
                         break
                 except:
                     continue
             
+            # If no events found with selectors, try to find by text content
+            if not events:
+                logger.info("Trying to find events by searching for 'Volleyball Pickup' text...")
+                try:
+                    # Look for elements containing "Volleyball Pickup"
+                    events = page.query_selector_all("text=/Volleyball Pickup/i")
+                    if events:
+                        # Get parent elements
+                        events = [e.evaluate_handle("el => el.closest('div, article, li, a')") for e in events if e]
+                        logger.info(f"Found {len(events)} events by text search")
+                except:
+                    pass
+            
             if not events:
                 logger.warning("No events found with any selector")
+                # Take a screenshot for debugging
+                page.screenshot(path='no_events_found.png')
                 return []
             
             # Filter events
@@ -121,33 +149,89 @@ class VoloBot:
                     event_text = (event.inner_text() or '').lower()
                     event_html = (event.inner_html() or '').lower()
                     
-                    # Check if title contains "Volleyball Pickup"
+                    # Check if title contains "Volleyball Pickup" (exact phrase, case insensitive)
                     if "volleyball pickup" not in event_text and "volleyball pickup" not in event_html:
                         continue
                     
-                    logger.info(f"Found event with 'Volleyball Pickup' in title: {event_text[:100]}")
+                    # Extract title for logging (first 150 chars)
+                    title_match = None
+                    try:
+                        # Try to find the title element
+                        title_elem = event.query_selector("h1, h2, h3, h4, [class*='title'], [class*='name']")
+                        if title_elem:
+                            title_match = title_elem.inner_text()[:150]
+                        else:
+                            title_match = event_text[:150]
+                    except:
+                        title_match = event_text[:150]
+                    
+                    logger.info(f"Found event with 'Volleyball Pickup' in title: {title_match}")
                     
                     # Check for $0 total
+                    # Look for price indicators - check if price is missing, $0, free, or shows no price
                     price_indicators = ["$0", "$0.00", "free", "0.00", "total: $0", "total: $0.00"]
-                    has_free_price = any(indicator in event_text or indicator in event_html for indicator in price_indicators)
+                    price_text_lower = event_text.lower()
+                    price_html_lower = event_html.lower()
                     
+                    # Check if price is explicitly $0
+                    has_free_price = any(indicator in price_text_lower or indicator in price_html_lower for indicator in price_indicators)
+                    
+                    # Also check if price elements exist and what they say
                     if not has_free_price:
-                        # Try to find price elements more specifically
                         try:
-                            price_elements = event.query_selector_all("[class*='price'], [class*='cost'], [class*='total']")
-                            for price_elem in price_elements:
-                                price_text = (price_elem.inner_text() or '').lower()
-                                if any(indicator in price_text for indicator in price_indicators):
-                                    has_free_price = True
+                            # Look for price elements
+                            price_selectors = [
+                                "[class*='price']",
+                                "[class*='cost']",
+                                "[class*='total']",
+                                "[class*='amount']",
+                                "[data-testid*='price']",
+                            ]
+                            for price_selector in price_selectors:
+                                try:
+                                    price_elements = event.query_selector_all(price_selector)
+                                    for price_elem in price_elements:
+                                        price_text = (price_elem.inner_text() or '').lower()
+                                        # If we find a price element, check its value
+                                        if any(indicator in price_text for indicator in price_indicators):
+                                            has_free_price = True
+                                            break
+                                        # If price element exists but is empty or shows no price, might be free
+                                        if not price_text.strip() or price_text in ['', 'n/a', 'tbd']:
+                                            # Check if there's no "$" symbol at all in the event
+                                            if '$' not in event_text and '$' not in event_html:
+                                                has_free_price = True
+                                                break
+                                except:
+                                    continue
+                                if has_free_price:
                                     break
                         except:
                             pass
                     
+                    # If no price indicators found, check if there's NO price mentioned at all
+                    # (Some free events might not show a price)
+                    if not has_free_price:
+                        # Check if there are any dollar signs in the event text/html
+                        has_dollar_sign = '$' in event_text or '$' in event_html
+                        # If no dollar sign and no explicit price, might be free
+                        if not has_dollar_sign:
+                            logger.info("  → No price found in event, assuming it might be free")
+                            has_free_price = True
+                    
                     if has_free_price:
-                        logger.info("✓ Event matches criteria: 'Volleyball Pickup' and $0 total")
+                        logger.info("✓ Event matches criteria: 'Volleyball Pickup' and $0/free")
                         matching_pickups.append(event)
                     else:
-                        logger.info(f"✗ Event has 'Volleyball Pickup' but not $0: {event_text[:100]}")
+                        # Extract price info for logging
+                        price_info = "unknown"
+                        try:
+                            price_elem = event.query_selector("[class*='price'], [class*='cost']")
+                            if price_elem:
+                                price_info = price_elem.inner_text()
+                        except:
+                            pass
+                        logger.info(f"✗ Event has 'Volleyball Pickup' but price is not $0: {price_info}")
                         
                 except Exception as e:
                     logger.warning(f"Error processing event: {e}")
@@ -165,22 +249,15 @@ class VoloBot:
         try:
             logger.info("Navigating to volleyball pickups")
             
-            # Try to find volleyball/pickup link
-            try:
-                page.click("text=Volleyball", timeout=10000)
-                page.wait_for_timeout(2000)
-            except PlaywrightTimeoutError:
-                try:
-                    page.click("a[href*='volleyball'], a[href*='pickup']", timeout=5000)
-                    page.wait_for_timeout(2000)
-                except PlaywrightTimeoutError:
-                    volleyball_url = os.getenv('VOLO_VOLLEYBALL_URL')
-                    if volleyball_url:
-                        logger.info(f"Navigating directly to {volleyball_url}")
-                        page.goto(volleyball_url, wait_until='networkidle')
-                        page.wait_for_timeout(2000)
-                    else:
-                        logger.warning("Could not find volleyball link")
+            # Navigate directly to the volleyball pickups page
+            volleyball_url = os.getenv('VOLO_VOLLEYBALL_URL')
+            if not volleyball_url:
+                # Default URL for San Francisco volleyball pickups
+                volleyball_url = 'https://www.volosports.com/discover?cityName=San%20Francisco&subView=DAILY&view=SPORTS&sportNames%5B0%5D=Volleyball'
+            
+            logger.info(f"Navigating to {volleyball_url}")
+            page.goto(volleyball_url, wait_until='networkidle')
+            page.wait_for_timeout(3000)  # Wait for events to load
             
             # Find matching pickups
             matching_pickups = self.find_matching_pickups(page)
@@ -195,70 +272,145 @@ class VoloBot:
                 try:
                     logger.info(f"Attempting to sign up for pickup...")
                     
-                    # Try to find signup button within this pickup element
-                    signup_button = None
-                    signup_selectors = [
-                        "button:has-text('Sign Up')",
-                        "a:has-text('Sign Up')",
-                        "button[class*='signup']",
-                        "a[class*='signup']",
-                        "button[id*='signup']",
-                        "a[id*='signup']",
-                    ]
+                    # Click on the pickup card/event to go to detail page
+                    try:
+                        logger.info("Clicking on event to view details...")
+                        pickup.click()
+                        page.wait_for_timeout(3000)  # Wait for detail page to load
+                    except Exception as e:
+                        logger.warning(f"Could not click pickup: {e}")
+                        continue
                     
-                    for selector in signup_selectors:
-                        try:
-                            signup_button = pickup.query_selector(selector)
-                            if signup_button:
-                                break
-                        except:
-                            continue
+                    # On the detail page, we need to:
+                    # 1. Check both waiver/agreement checkboxes
+                    # 2. Wait for Register button to become enabled
+                    # 3. Click Register button
                     
-                    # If not found within pickup, try clicking the pickup itself
-                    if not signup_button:
-                        try:
-                            pickup.click()
-                            page.wait_for_timeout(2000)
-                            # Now try to find signup button on the detail page
-                            for selector in signup_selectors:
+                    try:
+                        # Find and check the checkboxes
+                        logger.info("Looking for waiver/agreement checkboxes...")
+                        
+                        # Try multiple selectors for checkboxes
+                        checkbox_selectors = [
+                            "input[type='checkbox']",
+                            "input[type='checkbox']:not(:checked)",
+                            "[class*='checkbox'] input",
+                            "[class*='waiver'] input[type='checkbox']",
+                            "[class*='agreement'] input[type='checkbox']",
+                        ]
+                        
+                        checkboxes = []
+                        for selector in checkbox_selectors:
+                            try:
+                                checkboxes = page.query_selector_all(selector)
+                                if checkboxes:
+                                    logger.info(f"Found {len(checkboxes)} checkbox(es) using selector: {selector}")
+                                    break
+                            except:
+                                continue
+                        
+                        # Filter to only unchecked checkboxes
+                        unchecked_checkboxes = []
+                        for checkbox in checkboxes:
+                            try:
+                                if not checkbox.is_checked():
+                                    unchecked_checkboxes.append(checkbox)
+                            except:
+                                pass
+                        
+                        if len(unchecked_checkboxes) >= 2:
+                            logger.info(f"Found {len(unchecked_checkboxes)} unchecked checkbox(es), checking them...")
+                            for i, checkbox in enumerate(unchecked_checkboxes[:2], 1):  # Check first 2
                                 try:
-                                    signup_button = page.wait_for_selector(selector, timeout=3000)
-                                    if signup_button:
-                                        break
-                                except:
-                                    continue
-                        except:
-                            logger.warning("Could not find signup button for this pickup")
-                            continue
-                    
-                    if signup_button:
-                        signup_button.click()
-                        logger.info("Clicked signup button")
-                        page.wait_for_timeout(2000)
+                                    checkbox.check()
+                                    logger.info(f"✓ Checked checkbox {i}")
+                                    page.wait_for_timeout(500)  # Small delay between checks
+                                except Exception as e:
+                                    logger.warning(f"Could not check checkbox {i}: {e}")
+                        elif len(unchecked_checkboxes) == 1:
+                            logger.info("Found 1 unchecked checkbox, checking it...")
+                            try:
+                                unchecked_checkboxes[0].check()
+                                logger.info("✓ Checked checkbox")
+                                page.wait_for_timeout(500)
+                            except Exception as e:
+                                logger.warning(f"Could not check checkbox: {e}")
+                        else:
+                            logger.warning(f"Expected 2 checkboxes but found {len(unchecked_checkboxes)} unchecked ones")
                         
-                        # Confirm signup if needed
-                        try:
-                            confirm_selectors = [
-                                "button:has-text('Confirm')",
-                                "button[class*='confirm']",
-                            ]
-                            for selector in confirm_selectors:
-                                try:
-                                    confirm_button = page.wait_for_selector(selector, timeout=3000)
-                                    if confirm_button:
-                                        confirm_button.click()
-                                        logger.info("Confirmed signup")
-                                        break
-                                except:
-                                    continue
-                        except Exception as e:
-                            logger.info(f"No confirmation needed: {e}")
-                        
-                        signed_up_count += 1
-                        logger.info(f"Successfully signed up for pickup #{signed_up_count}!")
-                        
-                        # Go back if needed for next pickup
+                        # Wait a moment for Register button to become enabled
                         page.wait_for_timeout(1000)
+                        
+                        # Now find and click the Register button
+                        logger.info("Looking for Register button...")
+                        register_button = None
+                        register_selectors = [
+                            "button:has-text('Register')",
+                            "button[class*='register']:not([disabled])",
+                            "button[id*='register']:not([disabled])",
+                            "[data-testid*='register']:not([disabled])",
+                            "button:has-text('Sign Up')",
+                            "button:has-text('Join')",
+                        ]
+                        
+                        for selector in register_selectors:
+                            try:
+                                register_button = page.wait_for_selector(selector, timeout=5000)
+                                if register_button:
+                                    # Check if button is enabled (not disabled)
+                                    is_disabled = register_button.get_attribute('disabled')
+                                    if not is_disabled or is_disabled == 'false':
+                                        logger.info(f"Found enabled Register button using: {selector}")
+                                        break
+                                    else:
+                                        logger.info("Register button found but is disabled, waiting...")
+                                        # Wait a bit more and try again
+                                        page.wait_for_timeout(2000)
+                                        is_disabled = register_button.get_attribute('disabled')
+                                        if not is_disabled or is_disabled == 'false':
+                                            break
+                                        register_button = None
+                            except:
+                                continue
+                        
+                        if register_button:
+                            register_button.click()
+                            logger.info("✓ Clicked Register button")
+                            page.wait_for_timeout(2000)
+                            
+                            # Check for any confirmation dialogs or success messages
+                            try:
+                                confirm_selectors = [
+                                    "button:has-text('Confirm')",
+                                    "button:has-text('Complete')",
+                                    "button[class*='confirm']",
+                                ]
+                                for selector in confirm_selectors:
+                                    try:
+                                        confirm_button = page.wait_for_selector(selector, timeout=3000)
+                                        if confirm_button:
+                                            confirm_button.click()
+                                            logger.info("✓ Confirmed registration")
+                                            break
+                                    except:
+                                        continue
+                            except Exception as e:
+                                logger.info(f"No additional confirmation needed: {e}")
+                            
+                            signed_up_count += 1
+                            logger.info(f"✅ Successfully signed up for pickup #{signed_up_count}!")
+                            
+                        else:
+                            logger.warning("Could not find enabled Register button")
+                            page.screenshot(path=f'register_button_not_found_{signed_up_count}.png')
+                    
+                    except Exception as e:
+                        logger.error(f"Error during registration process: {e}")
+                        page.screenshot(path=f'registration_error_{signed_up_count}.png')
+                        continue
+                    
+                    # Go back to list if needed for next pickup
+                    page.wait_for_timeout(1000)
                         
                 except Exception as e:
                     logger.error(f"Error signing up for pickup: {e}")
