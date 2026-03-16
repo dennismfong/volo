@@ -272,6 +272,7 @@ class VoloBot:
                     
                     # Check for $0 total
                     # Price is in a separate div (not in the title), listed under the time on the far right
+                    # The price text may be split: "$" in one text node, "10" in another
                     # If there's NO price in any div, it's free
                     has_free_price = False
                     has_price_element = False
@@ -281,26 +282,92 @@ class VoloBot:
                         import re
                         
                         # FIRST: Check the entire event element (including all child divs) for price patterns
-                        # The price is in a div under text, so we need to search all divs within the event
-                        all_text = event_text
+                        # The price is in a div under text, and may be split across multiple text nodes
+                        # Get combined text from the event and all child divs (this combines split text nodes)
+                        all_text = event_text  # inner_text() already combines text nodes
                         all_html = event_html
                         
-                        # Also get text from all child divs
+                        # Also get text from all child divs (inner_text combines split text nodes)
                         try:
                             all_divs = event.query_selector_all("div")
                             for div in all_divs:
                                 try:
-                                    div_text = div.inner_text() or ""
-                                    div_html = div.inner_html() or ""
+                                    div_text = div.inner_text() or ""  # inner_text() combines all text nodes
                                     all_text += " " + div_text
-                                    all_html += " " + div_html
                                 except:
                                     pass
                         except:
                             pass
                         
-                        # Look for $X or $X.XX patterns in all text/html
-                        price_matches = re.findall(r'\$[\d.]+', all_text + ' ' + all_html)
+                        # Also check all span elements (prices might be in spans)
+                        try:
+                            all_spans = event.query_selector_all("span")
+                            for span in all_spans:
+                                try:
+                                    span_text = span.inner_text() or ""
+                                    all_text += " " + span_text
+                                except:
+                                    pass
+                        except:
+                            pass
+                        
+                        # Look for $X or $X.XX patterns in all combined text
+                        # inner_text() should combine text nodes, but if price is split, we need to check parent elements
+                        price_matches = re.findall(r'\$[\d.]+', all_text)
+                        
+                        # If no price pattern found, check for split text nodes:
+                        # Look for "$" and numbers in the same parent element
+                        if not price_matches:
+                            try:
+                                # Check all divs - look for divs that contain "$" 
+                                # and check if the div's text (which combines all child text nodes) has prices
+                                all_divs = event.query_selector_all("div")
+                                for div in all_divs:
+                                    try:
+                                        div_text = div.inner_text() or ""  # inner_text() combines all text nodes
+                                        # Check if div has "$" 
+                                        if "$" in div_text:
+                                            # inner_text() should have combined "$" and "10" if they're in the same div
+                                            div_prices = re.findall(r'\$[\d.]+', div_text)
+                                            if div_prices:
+                                                price_matches.extend(div_prices)
+                                                logger.info(f"  Found price in div (combined text nodes): {div_prices}")
+                                                break
+                                            # If still no match, "$" and number might be in separate divs
+                                            # Check if there's a number nearby
+                                            if re.search(r'\d', div_text):
+                                                # Try to find $ and number close together
+                                                dollar_pos = div_text.find("$")
+                                                if dollar_pos >= 0:
+                                                    # Get text around $ (20 chars before and after)
+                                                    start = max(0, dollar_pos - 5)
+                                                    end = min(len(div_text), dollar_pos + 15)
+                                                    context = div_text[start:end]
+                                                    # Look for number after $
+                                                    numbers = re.findall(r'\d+\.?\d*', context)
+                                                    if numbers:
+                                                        price_matches.append(f"${numbers[0]}")
+                                                        logger.info(f"  Found split price in div: ${numbers[0]}")
+                                                        break
+                                    except:
+                                        continue
+                                
+                                # Also check spans (prices might be in spans)
+                                if not price_matches:
+                                    all_spans = event.query_selector_all("span")
+                                    for span in all_spans:
+                                        try:
+                                            span_text = span.inner_text() or ""
+                                            if "$" in span_text:
+                                                span_prices = re.findall(r'\$[\d.]+', span_text)
+                                                if span_prices:
+                                                    price_matches.extend(span_prices)
+                                                    break
+                                        except:
+                                            continue
+                            except Exception as e:
+                                logger.debug(f"  Error checking split text nodes: {e}")
+                                pass
                         
                         if price_matches:
                             # Found price patterns
