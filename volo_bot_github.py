@@ -566,7 +566,6 @@ class VoloBot:
                         try:
                             # Get all divs within the event element
                             event_divs = event.query_selector_all("div")
-                            logger.debug(f"  Checking {len(event_divs)} divs within this event for prices...")
                             
                             for div in event_divs:
                                 try:
@@ -577,29 +576,6 @@ class VoloBot:
                                         div_text_lower = div_text.lower()
                                         if "volleyball pickup" in div_text_lower or "$" in div_text or any(char.isdigit() for char in div_text):
                                             all_text += " " + div_text.lower()
-                                            # Log divs that contain "$" to see what we're getting
-                                            if "$" in div_text:
-                                                logger.info(f"  Found div with '$' in this event: '{div_text.strip()[:100]}'")
-                                except:
-                                    pass
-                        except Exception as e:
-                            logger.debug(f"  Error checking divs: {e}")
-                            pass
-                        
-                        # Also explicitly check all divs within the event element
-                        # This catches cases where the event element IS the container
-                        try:
-                            all_divs = event.query_selector_all("div")
-                            logger.info(f"  Checking {len(all_divs)} divs within event for prices...")
-                            
-                            for div in all_divs:
-                                try:
-                                    div_text = div.inner_text() or ""  # This combines "$" and "10" into "$10"
-                                    if div_text.strip():
-                                        all_text += " " + div_text.lower()
-                                        # Log divs that contain "$" to see what we're getting
-                                        if "$" in div_text:
-                                            logger.info(f"  Found div with '$': '{div_text.strip()[:150]}'")
                                 except:
                                     pass
                         except Exception as e:
@@ -614,7 +590,6 @@ class VoloBot:
                                     span_text = span.inner_text() or ""
                                     if span_text.strip() and "$" in span_text:
                                         all_text += " " + span_text.lower()
-                                        logger.info(f"  Found span with '$': '{span_text.strip()[:100]}'")
                                 except:
                                     pass
                         except:
@@ -624,12 +599,9 @@ class VoloBot:
                         # inner_text() should have combined "$" and "10" into "$10" if they're in the same div
                         price_matches = re.findall(r'\$[\d.]+', all_text)
                         
-                        # Log what we found for debugging
+                        # Log what we found (concise)
                         if price_matches:
-                            logger.info(f"  Found price patterns: {price_matches}")
-                        else:
-                            # Log a sample of the text we checked to help debug
-                            logger.info(f"  No price patterns found. Checked text sample: {all_text[:300]}")
+                            logger.debug(f"  Found price patterns: {price_matches}")
                         
                         # If no price pattern found, check for split text nodes:
                         # Look for "$" and numbers in the same parent element
@@ -647,7 +619,6 @@ class VoloBot:
                                             div_prices = re.findall(r'\$[\d.]+', div_text)
                                             if div_prices:
                                                 price_matches.extend(div_prices)
-                                                logger.info(f"  Found price in div (combined text nodes): {div_prices}")
                                                 break
                                             # If still no match, "$" and number might be in separate divs
                                             # Check if there's a number nearby
@@ -663,7 +634,6 @@ class VoloBot:
                                                     numbers = re.findall(r'\d+\.?\d*', context)
                                                     if numbers:
                                                         price_matches.append(f"${numbers[0]}")
-                                                        logger.info(f"  Found split price in div: ${numbers[0]}")
                                                         break
                                     except:
                                         continue
@@ -689,7 +659,6 @@ class VoloBot:
                             # Found price patterns
                             has_price_element = True
                             found_price_value = ', '.join(price_matches)
-                            logger.info(f"  Found price patterns: {price_matches}")
                             
                             # Filter out $0 prices and check if any non-zero prices exist
                             non_zero_prices = [p for p in price_matches if p not in ['$0', '$0.00', '$0.0', '$0.']]
@@ -697,15 +666,15 @@ class VoloBot:
                             if non_zero_prices:
                                 # Has prices that are not $0
                                 has_free_price = False
-                                logger.info(f"  → Price is NOT free: {non_zero_prices}")
+                                logger.info(f"  → Price: {', '.join(non_zero_prices)} (NOT free)")
                             elif any(p in ['$0', '$0.00', '$0.0'] for p in price_matches):
                                 # Only $0 prices found
                                 has_free_price = True
-                                logger.info("  → Found $0 in text - event is FREE")
+                                logger.info("  → Price: $0 (FREE)")
                             else:
                                 # Has price patterns but unclear - be conservative
                                 has_free_price = False
-                                logger.info(f"  → Found price patterns: {price_matches} - assuming NOT free")
+                                logger.info(f"  → Price patterns: {price_matches} (assuming NOT free)")
                         else:
                             # No price patterns found, try looking for price elements in divs
                             # Look for divs that might contain prices
