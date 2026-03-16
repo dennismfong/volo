@@ -230,14 +230,151 @@ class VoloBot:
             if not events:
                 logger.info("Trying to find events by searching for 'Volleyball Pickup' text...")
                 try:
-                    # Look for elements containing "Volleyball Pickup"
-                    events = page.query_selector_all("text=/Volleyball Pickup/i")
-                    if events:
-                        # Get parent elements
-                        events = [e.evaluate_handle("el => el.closest('div, article, li, a')") for e in events if e]
+                    # Use locator to find elements containing "Volleyball Pickup"
+                    # Then get their parent containers
+                    text_locators = page.locator("text=/Volleyball Pickup/i")
+                    count = text_locators.count()
+                    
+                    if count > 0:
+                        events = []
+                        for i in range(count):
+                            try:
+                                text_locator = text_locators.nth(i)
+                                # Get the parent element that contains the full event
+                                # Walk up to find a container div
+                                parent_locator = text_locator.locator("xpath=ancestor::div[1]")
+                                # Try to get a few levels up to find the event card
+                                for level in range(1, 5):  # Check up to 4 levels up
+                                    try:
+                                        ancestor = text_locator.locator(f"xpath=ancestor::div[{level}]")
+                                        if ancestor.count() > 0:
+                                            # Get the element handle
+                                            elem = ancestor.first
+                                            # Check if this element has substantial content (likely the event card)
+                                            text = elem.inner_text() if hasattr(elem, 'inner_text') else ""
+                                            if text and len(text) > 50:  # Event cards should have substantial text
+                                                events.append(elem)
+                                                break
+                                    except:
+                                        continue
+                            except:
+                                pass
                         logger.info(f"Found {len(events)} events by text search")
-                except:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Error finding events by text: {e}")
+                    # Fallback: try simple text search and walk up DOM tree
+                    try:
+                        text_elements = page.query_selector_all("text=/Volleyball Pickup/i")
+                        if text_elements:
+                            events = []
+                            for text_elem in text_elements:
+                                try:
+                                    # Walk up the DOM tree to find a parent with substantial content
+                                    # Use evaluate to get parent elements
+                                    parent_handles = text_elem.evaluate("""
+                                        el => {
+                                            const parents = [];
+                                            let current = el;
+                                            for (let i = 0; i < 8; i++) {
+                                                if (!current || !current.parentElement) break;
+                                                current = current.parentElement;
+                                                const text = current.innerText || '';
+                                                if (text.length > 80) {  // Substantial content
+                                                    parents.push({ level: i, textLength: text.length });
+                                                }
+                                            }
+                                            return parents;
+                                        }
+                                    """)
+                                    
+                                    # Now actually get the parent element
+                                    # Walk up and find the best parent
+                                    current_elem = text_elem
+                                    best_parent = None
+                                    best_length = 0
+                                    
+                                    for level in range(8):
+                                        try:
+                                            # Get parent using evaluate_handle
+                                            parent_js = current_elem.evaluate_handle("el => el.parentElement")
+                                            if not parent_js:
+                                                break
+                                            
+                                            # Convert JSHandle to ElementHandle if possible
+                                            # Actually, we need to use a different approach
+                                            # Let's use evaluate to get a selector for the parent, then query it
+                                            parent_info = current_elem.evaluate("""
+                                                el => {
+                                                    const parent = el.parentElement;
+                                                    if (!parent) return null;
+                                                    const text = parent.innerText || '';
+                                                    return { textLength: text.length, hasPrice: text.includes('$') };
+                                                }
+                                            """)
+                                            
+                                            if parent_info and parent_info['textLength'] > best_length:
+                                                best_length = parent_info['textLength']
+                                                # Get parent by walking up with a different method
+                                                # Use xpath to get parent
+                                                try:
+                                                    parent_xpath = current_elem.evaluate("el => { const xpath = getXPath(el.parentElement); return xpath; }")
+                                                except:
+                                                    pass
+                                            
+                                            # Try to get parent using a simpler method
+                                            try:
+                                                # Use evaluate to get parent's innerHTML length as a way to identify it
+                                                parent_text_len = current_elem.evaluate("el => el.parentElement ? (el.parentElement.innerText || '').length : 0")
+                                                if parent_text_len > best_length:
+                                                    best_length = parent_text_len
+                                                    # We'll get the parent differently
+                                            except:
+                                                pass
+                                            
+                                            # Move to next level
+                                            try:
+                                                current_elem = current_elem.evaluate_handle("el => el.parentElement")
+                                                if not current_elem:
+                                                    break
+                                            except:
+                                                break
+                                        except:
+                                            break
+                                    
+                                    # For now, just use the text element's closest div parent
+                                    # We'll rely on inner_text() to get all nested content
+                                    try:
+                                        # Get a parent div by evaluating
+                                        parent_div = text_elem.evaluate("""
+                                            el => {
+                                                let current = el;
+                                                for (let i = 0; i < 5; i++) {
+                                                    if (!current) break;
+                                                    if (current.tagName === 'DIV' && (current.innerText || '').length > 80) {
+                                                        return true;  // Found a good parent
+                                                    }
+                                                    current = current.parentElement;
+                                                }
+                                                return false;
+                                            }
+                                        """)
+                                        
+                                        # Since we can't easily get the ElementHandle, 
+                                        # we'll use the text element itself and rely on getting all text from it
+                                        # The key is to make sure we check all nested divs when checking prices
+                                        events.append(text_elem)
+                                    except:
+                                        events.append(text_elem)  # Use the text element as fallback
+                                        
+                                except Exception as e:
+                                    logger.debug(f"Error processing text element: {e}")
+                                    pass
+                            
+                            if events:
+                                logger.info(f"Found {len(events)} events by text search (fallback)")
+                    except Exception as e:
+                        logger.debug(f"Fallback text search error: {e}")
+                        pass
             
             if not events:
                 logger.warning("No events found with any selector")
@@ -285,27 +422,75 @@ class VoloBot:
                         # The price is in a div under text, and "$" and "10" are separate text nodes in the same div
                         # inner_text() should combine them, but we need to check each div individually
                         
-                        # Get text from all divs - each div's inner_text() will combine its child text nodes
-                        all_text_parts = []
+                        # Get ALL text from the event element and its parent container
+                        # The price is in a div that's a sibling or child of the event container
+                        # We need to check the parent container, not just the event element
                         
-                        # Start with the event's own text
-                        if event_text:
-                            all_text_parts.append(event_text)
+                        # Strategy: Get parent container's text, which should include the price div
+                        all_text = ""
                         
-                        # Get text from all child divs (inner_text() combines split text nodes like "$" and "10")
+                        # First, try to get the parent container that has the full event card
+                        try:
+                            # Use evaluate to get parent's text (which includes all child divs)
+                            parent_container_text = event.evaluate("""
+                                el => {
+                                    // Walk up to find a parent with substantial content (the event card)
+                                    let current = el;
+                                    let bestParent = null;
+                                    let bestLength = 0;
+                                    
+                                    for (let i = 0; i < 8; i++) {
+                                        if (!current || !current.parentElement) break;
+                                        current = current.parentElement;
+                                        const text = current.innerText || '';
+                                        // If this parent has substantial content, remember it
+                                        if (text.length > bestLength) {
+                                            bestLength = text.length;
+                                            bestParent = current;
+                                        }
+                                        // If we found a parent with substantial content, use it
+                                        if (text.length > 150) {
+                                            return { text: text, level: i, length: text.length };
+                                        }
+                                    }
+                                    // Fallback: return the best parent we found, or the original element's text
+                                    if (bestParent) {
+                                        return { text: bestParent.innerText || '', level: -1, length: bestLength };
+                                    }
+                                    return { text: el.innerText || '', level: -2, length: (el.innerText || '').length };
+                                }
+                            """)
+                            
+                            if parent_container_text and parent_container_text.get('text'):
+                                all_text = parent_container_text['text'].lower()
+                                logger.info(f"  Got parent container text (length: {len(all_text)}, level: {parent_container_text.get('level', 'unknown')})")
+                                # Log a sample to see what we're checking
+                                logger.info(f"  Sample text: {all_text[:400]}")
+                            else:
+                                all_text = event_text
+                                logger.info(f"  Using event element text (length: {len(all_text)})")
+                        except Exception as e:
+                            logger.debug(f"  Error getting parent text: {e}")
+                            all_text = event_text
+                        
+                        # Also explicitly check all divs within the event element
+                        # This catches cases where the event element IS the container
                         try:
                             all_divs = event.query_selector_all("div")
+                            logger.info(f"  Checking {len(all_divs)} divs within event for prices...")
+                            
                             for div in all_divs:
                                 try:
                                     div_text = div.inner_text() or ""  # This combines "$" and "10" into "$10"
                                     if div_text.strip():
-                                        all_text_parts.append(div_text)
-                                        # Debug: log if we find a div with "$" to see if it's being combined
+                                        all_text += " " + div_text.lower()
+                                        # Log divs that contain "$" to see what we're getting
                                         if "$" in div_text:
-                                            logger.debug(f"  Found div with '$': '{div_text[:50]}'")
+                                            logger.info(f"  Found div with '$': '{div_text.strip()[:150]}'")
                                 except:
                                     pass
-                        except:
+                        except Exception as e:
+                            logger.debug(f"  Error checking divs: {e}")
                             pass
                         
                         # Also check all span elements
@@ -314,15 +499,13 @@ class VoloBot:
                             for span in all_spans:
                                 try:
                                     span_text = span.inner_text() or ""
-                                    if span_text.strip():
-                                        all_text_parts.append(span_text)
+                                    if span_text.strip() and "$" in span_text:
+                                        all_text += " " + span_text.lower()
+                                        logger.info(f"  Found span with '$': '{span_text.strip()[:100]}'")
                                 except:
                                     pass
                         except:
                             pass
-                        
-                        # Combine all text parts
-                        all_text = " ".join(all_text_parts)
                         
                         # Look for $X or $X.XX patterns in all combined text
                         # inner_text() should have combined "$" and "10" into "$10" if they're in the same div
@@ -330,9 +513,10 @@ class VoloBot:
                         
                         # Log what we found for debugging
                         if price_matches:
-                            logger.info(f"  Found price patterns in combined text: {price_matches}")
+                            logger.info(f"  Found price patterns: {price_matches}")
                         else:
-                            logger.debug(f"  No price patterns found. Sample text checked: {all_text[:200]}")
+                            # Log a sample of the text we checked to help debug
+                            logger.info(f"  No price patterns found. Checked text sample: {all_text[:300]}")
                         
                         # If no price pattern found, check for split text nodes:
                         # Look for "$" and numbers in the same parent element
