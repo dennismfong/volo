@@ -149,40 +149,45 @@ class VoloBot:
             logger.info("✓ Clicked login button")
             
             # Wait for navigation after login
+            logger.info("Waiting for login to complete...")
             page.wait_for_timeout(3000)
             
-            # Wait for URL to change or check if we're redirected
+            # Wait for URL to change away from login page
             try:
-                page.wait_for_url("**/login", timeout=2000, state="detached")
-                logger.info("Redirected away from login page")
+                # Wait up to 10 seconds for URL to change
+                page.wait_for_function(
+                    "window.location.href.indexOf('login') === -1",
+                    timeout=10000
+                )
+                current_url = page.url
+                logger.info(f"✅ Login successful - redirected to: {current_url}")
+                return True
             except:
                 # Check current URL
                 current_url = page.url
+                logger.info(f"Current URL after login attempt: {current_url}")
+                
                 if "login" not in current_url.lower():
-                    logger.info(f"Login successful - redirected to: {current_url}")
+                    logger.info("✅ Login successful - not on login page")
                     return True
                 else:
                     logger.warning("Still on login page, checking for errors...")
                     # Check for error messages
                     try:
-                        error_elements = page.query_selector_all("text=/error|invalid|incorrect/i")
+                        error_elements = page.query_selector_all("text=/error|invalid|incorrect|wrong/i")
                         if error_elements:
-                            error_text = error_elements[0].inner_text()
-                            logger.error(f"Login error detected: {error_text}")
+                            for elem in error_elements[:3]:  # Check first 3 error elements
+                                try:
+                                    error_text = elem.inner_text()
+                                    if error_text:
+                                        logger.error(f"Login error detected: {error_text}")
+                                except:
+                                    pass
                     except:
                         pass
                     page.screenshot(path='login_failed.png')
+                    logger.error("❌ Login failed - still on login page")
                     return False
-            
-            # Verify login success by checking URL
-            current_url = page.url
-            if "login" not in current_url.lower():
-                logger.info("Login successful")
-                return True
-            else:
-                logger.error("Login may have failed - still on login page")
-                page.screenshot(path='login_failed.png')
-                return False
                 
         except Exception as e:
             logger.error(f"Login failed: {e}")
@@ -345,7 +350,7 @@ class VoloBot:
     def signup_for_volleyball(self, page):
         """Navigate to volleyball pickups and sign up for matching events"""
         try:
-            logger.info("Navigating to volleyball pickups")
+            logger.info("Navigating to volleyball pickups page...")
             
             # Navigate directly to the volleyball pickups page
             volleyball_url = os.getenv('VOLO_VOLLEYBALL_URL')
@@ -354,8 +359,15 @@ class VoloBot:
                 volleyball_url = 'https://www.volosports.com/discover?cityName=San%20Francisco&subView=DAILY&view=SPORTS&sportNames%5B0%5D=Volleyball'
             
             logger.info(f"Navigating to {volleyball_url}")
-            page.goto(volleyball_url, wait_until='networkidle')
+            page.goto(volleyball_url, wait_until='networkidle', timeout=30000)
             page.wait_for_timeout(3000)  # Wait for events to load
+            
+            # Check if we got redirected to login page
+            current_url = page.url
+            if 'login' in current_url.lower():
+                logger.warning("Got redirected to login page - login may have failed")
+                page.screenshot(path='redirected_to_login.png')
+                return False
             
             # Find matching pickups
             matching_pickups = self.find_matching_pickups(page)
@@ -561,13 +573,33 @@ class VoloBot:
                 page = context.new_page()
                 
                 try:
-                    if self.login(page):
-                        if self.signup_for_volleyball(page):
-                            logger.info("Bot execution completed successfully!")
-                        else:
-                            logger.error("Signup failed")
+                    logger.info("=" * 60)
+                    logger.info("STEP 1: LOGGING IN")
+                    logger.info("=" * 60)
+                    login_success = self.login(page)
+                    
+                    if not login_success:
+                        logger.error("❌ Login failed - stopping execution")
+                        logger.error("Please check your VOLO_EMAIL and VOLO_PASSWORD secrets")
+                        page.screenshot(path='login_failed_final.png')
+                        return
+                    
+                    logger.info("=" * 60)
+                    logger.info("✅ LOGIN SUCCESSFUL!")
+                    logger.info("=" * 60)
+                    logger.info("STEP 2: FINDING PICKUPS")
+                    logger.info("=" * 60)
+                    
+                    signup_success = self.signup_for_volleyball(page)
+                    
+                    if signup_success:
+                        logger.info("=" * 60)
+                        logger.info("✅ BOT EXECUTION COMPLETED SUCCESSFULLY!")
+                        logger.info("=" * 60)
                     else:
-                        logger.error("Login failed")
+                        logger.error("=" * 60)
+                        logger.error("❌ SIGNUP/SEARCH FAILED")
+                        logger.error("=" * 60)
                 finally:
                     browser.close()
                     logger.info("Browser closed")
