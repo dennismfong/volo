@@ -50,52 +50,143 @@ class VoloBot:
     def login(self, page):
         """Login to Volo Sports"""
         try:
-            if not self.volo_url or not self.volo_url.startswith('http'):
-                raise ValueError(f"Invalid URL: {self.volo_url}. Please set VOLO_URL secret to a valid URL (e.g., https://www.volosports.com)")
-            
-            logger.info(f"Navigating to {self.volo_url}")
-            page.goto(self.volo_url, wait_until='networkidle')
-            
-            # Wait for and click login button/link
-            try:
-                page.click("text=Login", timeout=10000)
-                logger.info("Clicked login button")
-            except PlaywrightTimeoutError:
-                # Try alternative selectors
-                try:
-                    page.click("a[href*='login'], button:has-text('Login')", timeout=5000)
-                    logger.info("Clicked login button (alternative selector)")
-                except PlaywrightTimeoutError:
-                    logger.warning("Could not find login button, assuming already on login page")
-            
+            # Navigate directly to login page
+            login_url = 'https://www.volosports.com/login'
+            logger.info(f"Navigating to login page: {login_url}")
+            page.goto(login_url, wait_until='networkidle')
             page.wait_for_timeout(2000)
             
-            # Enter email
-            email_field = page.wait_for_selector("input[name='email'], input[type='email']", timeout=10000)
+            # Wait for login form to load
+            logger.info("Waiting for login form...")
+            
+            # Enter email - try multiple selectors
+            email_selectors = [
+                "input[type='email']",
+                "input[name='email']",
+                "input[placeholder*='email']",
+                "input[placeholder*='Email']",
+                "input[id*='email']",
+                "label:has-text('Email') + input",
+                "input[aria-label*='email' i]",
+            ]
+            
+            email_field = None
+            for selector in email_selectors:
+                try:
+                    email_field = page.wait_for_selector(selector, timeout=3000)
+                    if email_field:
+                        logger.info(f"Found email field using: {selector}")
+                        break
+                except:
+                    continue
+            
+            if not email_field:
+                logger.error("Could not find email field")
+                page.screenshot(path='login_email_field_error.png')
+                return False
+            
             email_field.fill(self.email)
-            logger.info("Entered email")
+            logger.info("✓ Entered email")
+            page.wait_for_timeout(500)
             
-            # Enter password
-            password_field = page.wait_for_selector("input[name='password'], input[type='password']", timeout=10000)
+            # Enter password - try multiple selectors
+            password_selectors = [
+                "input[type='password']",
+                "input[name='password']",
+                "input[placeholder*='password']",
+                "input[placeholder*='Password']",
+                "input[id*='password']",
+                "label:has-text('Password') + input",
+                "input[aria-label*='password' i]",
+            ]
+            
+            password_field = None
+            for selector in password_selectors:
+                try:
+                    password_field = page.wait_for_selector(selector, timeout=3000)
+                    if password_field:
+                        logger.info(f"Found password field using: {selector}")
+                        break
+                except:
+                    continue
+            
+            if not password_field:
+                logger.error("Could not find password field")
+                page.screenshot(path='login_password_field_error.png')
+                return False
+            
             password_field.fill(self.password)
-            logger.info("Entered password")
+            logger.info("✓ Entered password")
+            page.wait_for_timeout(500)
             
-            # Submit login form
-            page.click("button[type='submit'], input[type='submit']")
-            logger.info("Submitted login form")
+            # Click login button - try multiple selectors
+            login_button_selectors = [
+                "button:has-text('Log in with email')",
+                "button:has-text('Log in')",
+                "button:has-text('Login')",
+                "button[type='submit']",
+                "button[class*='login']",
+                "button[id*='login']",
+                "[data-testid*='login']",
+            ]
             
+            login_button = None
+            for selector in login_button_selectors:
+                try:
+                    login_button = page.wait_for_selector(selector, timeout=3000)
+                    if login_button and login_button.is_visible():
+                        logger.info(f"Found login button using: {selector}")
+                        break
+                except:
+                    continue
+            
+            if not login_button:
+                logger.error("Could not find login button")
+                page.screenshot(path='login_button_error.png')
+                return False
+            
+            login_button.click()
+            logger.info("✓ Clicked login button")
+            
+            # Wait for navigation after login
             page.wait_for_timeout(3000)
             
-            # Verify login success
-            if "login" not in page.url.lower():
+            # Wait for URL to change or check if we're redirected
+            try:
+                page.wait_for_url("**/login", timeout=2000, state="detached")
+                logger.info("Redirected away from login page")
+            except:
+                # Check current URL
+                current_url = page.url
+                if "login" not in current_url.lower():
+                    logger.info(f"Login successful - redirected to: {current_url}")
+                    return True
+                else:
+                    logger.warning("Still on login page, checking for errors...")
+                    # Check for error messages
+                    try:
+                        error_elements = page.query_selector_all("text=/error|invalid|incorrect/i")
+                        if error_elements:
+                            error_text = error_elements[0].inner_text()
+                            logger.error(f"Login error detected: {error_text}")
+                    except:
+                        pass
+                    page.screenshot(path='login_failed.png')
+                    return False
+            
+            # Verify login success by checking URL
+            current_url = page.url
+            if "login" not in current_url.lower():
                 logger.info("Login successful")
                 return True
             else:
                 logger.error("Login may have failed - still on login page")
+                page.screenshot(path='login_failed.png')
                 return False
                 
         except Exception as e:
             logger.error(f"Login failed: {e}")
+            page.screenshot(path='login_exception.png')
             return False
     
     def find_matching_pickups(self, page):
