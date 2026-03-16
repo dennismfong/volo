@@ -271,69 +271,84 @@ class VoloBot:
                     logger.info(f"Found event with 'Volleyball Pickup' in title: {title_match}")
                     
                     # Check for $0 total
-                    # Look for price indicators - check if price is missing, $0, free, or shows no price
-                    price_indicators = ["$0", "$0.00", "free", "0.00", "total: $0", "total: $0.00"]
-                    price_text_lower = event_text.lower()
-                    price_html_lower = event_html.lower()
+                    # Price is listed under the time on the far right
+                    # If there's NO price element in that area, it's free
+                    has_free_price = False
+                    has_price_element = False
+                    found_price_value = None
                     
-                    # Check if price is explicitly $0
-                    has_free_price = any(indicator in price_text_lower or indicator in price_html_lower for indicator in price_indicators)
-                    
-                    # Also check if price elements exist and what they say
-                    if not has_free_price:
-                        try:
-                            # Look for price elements
-                            price_selectors = [
-                                "[class*='price']",
-                                "[class*='cost']",
-                                "[class*='total']",
-                                "[class*='amount']",
-                                "[data-testid*='price']",
-                            ]
-                            for price_selector in price_selectors:
-                                try:
-                                    price_elements = event.query_selector_all(price_selector)
+                    try:
+                        # Look for price elements - these should be in the area under the time (far right)
+                        price_selectors = [
+                            "[class*='price']",
+                            "[class*='cost']",
+                            "[class*='amount']",
+                            "[class*='fee']",
+                            "[data-testid*='price']",
+                        ]
+                        
+                        # First, check if there are any price elements at all
+                        for price_selector in price_selectors:
+                            try:
+                                price_elements = event.query_selector_all(price_selector)
+                                if price_elements:
                                     for price_elem in price_elements:
-                                        price_text = (price_elem.inner_text() or '').lower()
-                                        # If we find a price element, check its value
-                                        if any(indicator in price_text for indicator in price_indicators):
-                                            has_free_price = True
-                                            break
-                                        # If price element exists but is empty or shows no price, might be free
-                                        if not price_text.strip() or price_text in ['', 'n/a', 'tbd']:
-                                            # Check if there's no "$" symbol at all in the event
-                                            if '$' not in event_text and '$' not in event_html:
+                                        price_text = (price_elem.inner_text() or '').strip()
+                                        if price_text:
+                                            has_price_element = True
+                                            found_price_value = price_text
+                                            logger.info(f"  Found price element: '{price_text}'")
+                                            
+                                            # Check if it's $0 or free
+                                            price_lower = price_text.lower()
+                                            if any(ind in price_lower for ind in ["$0", "$0.00", "free", "0.00"]):
                                                 has_free_price = True
-                                                break
-                                except:
-                                    continue
-                                if has_free_price:
-                                    break
-                        except:
-                            pass
+                                                logger.info(f"  → Price is $0/free")
+                                            elif "$" in price_text or any(char.isdigit() for char in price_text):
+                                                # Has a price that's not $0
+                                                has_free_price = False
+                                                logger.info(f"  → Price is NOT free: {price_text}")
+                                            break
+                                    if has_price_element:
+                                        break
+                            except:
+                                continue
+                        
+                        # If no price elements found at all, check for dollar signs in the event
+                        if not has_price_element:
+                            # Look for any dollar signs in the event text/html
+                            import re
+                            price_matches = re.findall(r'\$[\d.]+', event_text + ' ' + event_html)
+                            
+                            if price_matches:
+                                # Found price patterns in text
+                                has_price_element = True
+                                found_price_value = ', '.join(price_matches)
+                                logger.info(f"  Found price patterns in text: {price_matches}")
+                                
+                                # Check if any match is $0
+                                if any(p in ['$0', '$0.00', '$0.0'] for p in price_matches):
+                                    has_free_price = True
+                                    logger.info("  → Found $0 in text - event is FREE")
+                                else:
+                                    has_free_price = False
+                                    logger.info(f"  → Found prices in text: {price_matches} - NOT free")
+                            else:
+                                # No price element and no price patterns - it's FREE
+                                has_free_price = True
+                                logger.info("  → No price element found - event is FREE")
                     
-                    # If no price indicators found, check if there's NO price mentioned at all
-                    # (Some free events might not show a price)
-                    if not has_free_price:
-                        # Check if there are any dollar signs in the event text/html
-                        has_dollar_sign = '$' in event_text or '$' in event_html
-                        # If no dollar sign and no explicit price, might be free
-                        if not has_dollar_sign:
-                            logger.info("  → No price found in event, assuming it might be free")
-                            has_free_price = True
+                    except Exception as e:
+                        logger.warning(f"  Error checking price: {e}")
+                        # If we can't determine, be conservative and assume it's not free
+                        has_free_price = False
+                        found_price_value = "error checking"
                     
                     if has_free_price:
                         logger.info("✓ Event matches criteria: 'Volleyball Pickup' and $0/free")
                         matching_pickups.append(event)
                     else:
-                        # Extract price info for logging
-                        price_info = "unknown"
-                        try:
-                            price_elem = event.query_selector("[class*='price'], [class*='cost']")
-                            if price_elem:
-                                price_info = price_elem.inner_text()
-                        except:
-                            pass
+                        price_info = found_price_value or "has price (not $0)"
                         logger.info(f"✗ Event has 'Volleyball Pickup' but price is not $0: {price_info}")
                         
                 except Exception as e:
@@ -425,6 +440,83 @@ class VoloBot:
                     except Exception as e:
                         logger.warning(f"Could not click pickup: {e}")
                         continue
+                    
+                    # SECOND CHECK: Verify "Order Total" is $0.00 on the detail page
+                    # This is a safety check in case price didn't show on the list page
+                    logger.info("Verifying Order Total is $0.00 on detail page...")
+                    order_total_is_zero = False
+                    
+                    try:
+                        # Get the page text and search for "Order Total"
+                        page_text = page.inner_text()
+                        import re
+                        
+                        # Look for "Order Total" followed by a price
+                        # Pattern: "Order Total" (optional text/whitespace) then $X.XX or $X
+                        order_total_pattern = r'order\s+total[^\$]*(\$[\d.]+)'
+                        match = re.search(order_total_pattern, page_text, re.IGNORECASE)
+                        
+                        if match:
+                            price_found = match.group(1)
+                            logger.info(f"Found Order Total: {price_found}")
+                            
+                            # Check if it's $0.00
+                            if price_found in ['$0', '$0.00', '$0.0']:
+                                order_total_is_zero = True
+                                logger.info("✓ Order Total is $0.00 - verified!")
+                            else:
+                                order_total_is_zero = False
+                                logger.info(f"✗ Order Total is NOT $0.00: {price_found}")
+                        else:
+                            # Order Total text not found - might be in different format
+                            # Check if there's any price near "total" text
+                            total_pattern = r'total[^\$]*(\$[\d.]+)'
+                            total_match = re.search(total_pattern, page_text, re.IGNORECASE)
+                            
+                            if total_match:
+                                price_found = total_match.group(1)
+                                if price_found in ['$0', '$0.00', '$0.0']:
+                                    order_total_is_zero = True
+                                    logger.info("✓ Total is $0.00 - verified!")
+                                else:
+                                    order_total_is_zero = False
+                                    logger.info(f"✗ Total is NOT $0.00: {price_found}")
+                            else:
+                                # No price found near "total" - might be free
+                                # But also check if there are any prices on the page at all
+                                all_prices = re.findall(r'\$[\d.]+', page_text)
+                                if all_prices:
+                                    # There are prices but none near "total" - might be free
+                                    logger.info(f"Found prices on page but none near 'total': {all_prices}")
+                                    # Check if any are $0
+                                    if any(p in ['$0', '$0.00', '$0.0'] for p in all_prices):
+                                        order_total_is_zero = True
+                                        logger.info("✓ Found $0.00 on page - assuming it's the order total")
+                                    else:
+                                        # Has prices but not $0 - might not be free
+                                        logger.warning("Found prices on page but none are $0 - being cautious")
+                                        order_total_is_zero = False
+                                else:
+                                    # No prices found at all - likely free
+                                    order_total_is_zero = True
+                                    logger.info("No prices found on page - assuming Order Total is $0.00")
+                        
+                        if not order_total_is_zero:
+                            logger.warning("✗ Order Total is NOT $0.00 - skipping this pickup")
+                            # Go back to the list page
+                            try:
+                                page.go_back()
+                                page.wait_for_timeout(2000)
+                            except:
+                                pass
+                            continue
+                        else:
+                            logger.info("✓ Order Total verification passed - proceeding with signup")
+                        
+                    except Exception as e:
+                        logger.warning(f"Error verifying Order Total: {e}")
+                        # If verification fails, continue anyway (since it passed initial check)
+                        logger.info("Continuing with signup despite Order Total check error (passed initial check)...")
                     
                     # On the detail page, we need to:
                     # 1. Check both waiver/agreement checkboxes
