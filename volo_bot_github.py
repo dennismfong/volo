@@ -358,15 +358,33 @@ class VoloBot:
                 # Default URL for San Francisco volleyball pickups
                 volleyball_url = 'https://www.volosports.com/discover?cityName=San%20Francisco&subView=DAILY&view=SPORTS&sportNames%5B0%5D=Volleyball'
             
-            logger.info(f"Navigating to {volleyball_url}")
-            page.goto(volleyball_url, wait_until='networkidle', timeout=30000)
-            page.wait_for_timeout(3000)  # Wait for events to load
+            logger.info(f"Navigating to: {volleyball_url}")
             
-            # Check if we got redirected to login page
-            current_url = page.url
-            if 'login' in current_url.lower():
-                logger.warning("Got redirected to login page - login may have failed")
-                page.screenshot(path='redirected_to_login.png')
+            try:
+                # Try navigating with a longer timeout and different wait strategy
+                page.goto(volleyball_url, wait_until='domcontentloaded', timeout=60000)
+                logger.info("Page navigation started, waiting for content...")
+                page.wait_for_timeout(5000)  # Wait for JavaScript to load content
+                
+                # Check current URL after navigation
+                current_url = page.url
+                logger.info(f"Current URL after navigation: {current_url}")
+                
+                # Check if we got redirected to login page
+                if 'login' in current_url.lower():
+                    logger.warning("Got redirected to login page - login may have failed")
+                    page.screenshot(path='redirected_to_login.png')
+                    return False
+                
+                # Take a screenshot to see what loaded
+                page.screenshot(path='pickups_page_loaded.png')
+                logger.info("✓ Pickups page loaded")
+                
+            except Exception as e:
+                logger.error(f"Error navigating to pickups page: {e}")
+                current_url = page.url
+                logger.info(f"Current URL when error occurred: {current_url}")
+                page.screenshot(path='pickups_page_error.png')
                 return False
             
             # Find matching pickups
