@@ -13,6 +13,8 @@ jobs:
   signup:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     
     steps:
     - name: Check run mode
@@ -60,9 +62,11 @@ jobs:
     - name: Upload logs
       if: always()
       uses: actions/upload-artifact@v4
+      continue-on-error: true
       with:
         name: bot-logs
         path: |
           volo_bot.log
-          *.png
+          signup_error.png
+        if-no-files-found: ignore
         retention-days: 7
