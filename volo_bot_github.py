@@ -353,24 +353,45 @@ class VoloBot:
                         for i in range(count):
                             try:
                                 text_locator = text_locators.nth(i)
-                                # Get the parent element that contains the full event
-                                # Walk up to find a container div
-                                parent_locator = text_locator.locator("xpath=ancestor::div[1]")
-                                # Try to get a few levels up to find the event card
-                                for level in range(1, 5):  # Check up to 4 levels up
-                                    try:
-                                        ancestor = text_locator.locator(f"xpath=ancestor::div[{level}]")
-                                        if ancestor.count() > 0:
-                                            # Get the element handle
-                                            elem = ancestor.first
-                                            # Check if this element has substantial content (likely the event card)
-                                            text = elem.inner_text() if hasattr(elem, 'inner_text') else ""
-                                            if text and len(text) > 50:  # Event cards should have substantial text
-                                                events.append(elem)
-                                                break
-                                    except:
-                                        continue
-                            except:
+                                # Find the smallest container that contains this event
+                                # Use evaluate to find the closest parent that contains the event but not other events
+                                event_elem = text_locator.evaluate_handle("""
+                                    el => {
+                                        // Walk up the DOM tree to find the event container
+                                        // Stop when we find a container that:
+                                        // 1. Contains "Volleyball Pickup" (this event)
+                                        // 2. Has reasonable size (50-300 chars) - not too small, not containing all events
+                                        let current = el;
+                                        let bestMatch = null;
+                                        
+                                        for (let level = 0; level < 6; level++) {
+                                            if (!current || !current.parentElement) break;
+                                            current = current.parentElement;
+                                            const text = (current.innerText || '').toLowerCase();
+                                            const textLength = text.length;
+                                            
+                                            // Check if this container has "volleyball pickup"
+                                            if (text.includes('volleyball pickup')) {
+                                                // Prefer containers that are event-sized (not too large)
+                                                // If text is 50-300 chars, it's likely a single event
+                                                if (textLength >= 50 && textLength <= 300) {
+                                                    return current;
+                                                }
+                                                // Remember the first container with "volleyball pickup" as fallback
+                                                if (!bestMatch) {
+                                                    bestMatch = current;
+                                                }
+                                            }
+                                        }
+                                        // Return best match or the original element's closest div
+                                        return bestMatch || el.closest('div') || el;
+                                    }
+                                """)
+                                
+                                if event_elem:
+                                    events.append(event_elem)
+                            except Exception as e:
+                                logger.debug(f"Error getting event container: {e}")
                                 pass
                         logger.info(f"Found {len(events)} events by text search")
                 except Exception as e:
@@ -535,56 +556,35 @@ class VoloBot:
                         # The price is in a div under text, and "$" and "10" are separate text nodes in the same div
                         # inner_text() should combine them, but we need to check each div individually
                         
-                        # Get ALL text from the event element and its parent container
-                        # The price is in a div that's a sibling or child of the event container
-                        # We need to check the parent container, not just the event element
+                        # Get text from the event element itself
+                        # The event element should already be the right container (not containing all events)
+                        # Check prices only within this specific event container
+                        all_text = event_text  # Start with the event's own text
                         
-                        # Strategy: Get parent container's text, which should include the price div
-                        all_text = ""
-                        
-                        # First, try to get the parent container that has the full event card
+                        # Also check all divs within THIS event element (not parent containers)
+                        # This ensures we only check prices for this specific event
                         try:
-                            # Use evaluate to get parent's text (which includes all child divs)
-                            parent_container_text = event.evaluate("""
-                                el => {
-                                    // Walk up to find a parent with substantial content (the event card)
-                                    let current = el;
-                                    let bestParent = null;
-                                    let bestLength = 0;
-                                    
-                                    for (let i = 0; i < 8; i++) {
-                                        if (!current || !current.parentElement) break;
-                                        current = current.parentElement;
-                                        const text = current.innerText || '';
-                                        // If this parent has substantial content, remember it
-                                        if (text.length > bestLength) {
-                                            bestLength = text.length;
-                                            bestParent = current;
-                                        }
-                                        // If we found a parent with substantial content, use it
-                                        if (text.length > 150) {
-                                            return { text: text, level: i, length: text.length };
-                                        }
-                                    }
-                                    // Fallback: return the best parent we found, or the original element's text
-                                    if (bestParent) {
-                                        return { text: bestParent.innerText || '', level: -1, length: bestLength };
-                                    }
-                                    return { text: el.innerText || '', level: -2, length: (el.innerText || '').length };
-                                }
-                            """)
+                            # Get all divs within the event element
+                            event_divs = event.query_selector_all("div")
+                            logger.debug(f"  Checking {len(event_divs)} divs within this event for prices...")
                             
-                            if parent_container_text and parent_container_text.get('text'):
-                                all_text = parent_container_text['text'].lower()
-                                logger.info(f"  Got parent container text (length: {len(all_text)}, level: {parent_container_text.get('level', 'unknown')})")
-                                # Log a sample to see what we're checking
-                                logger.info(f"  Sample text: {all_text[:400]}")
-                            else:
-                                all_text = event_text
-                                logger.info(f"  Using event element text (length: {len(all_text)})")
+                            for div in event_divs:
+                                try:
+                                    div_text = div.inner_text() or ""
+                                    if div_text.strip():
+                                        # Only add text that's relevant to this event
+                                        # Check if this div contains the event title or price indicators
+                                        div_text_lower = div_text.lower()
+                                        if "volleyball pickup" in div_text_lower or "$" in div_text or any(char.isdigit() for char in div_text):
+                                            all_text += " " + div_text.lower()
+                                            # Log divs that contain "$" to see what we're getting
+                                            if "$" in div_text:
+                                                logger.info(f"  Found div with '$' in this event: '{div_text.strip()[:100]}'")
+                                except:
+                                    pass
                         except Exception as e:
-                            logger.debug(f"  Error getting parent text: {e}")
-                            all_text = event_text
+                            logger.debug(f"  Error checking divs: {e}")
+                            pass
                         
                         # Also explicitly check all divs within the event element
                         # This catches cases where the event element IS the container
