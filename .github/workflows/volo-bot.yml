@@ -46,8 +46,11 @@ jobs:
     - name: Install Playwright browsers
       if: success()
       run: |
+        # Install system dependencies first (fix for Ubuntu 24.04)
+        sudo apt-get update
+        sudo apt-get install -y libasound2t64 || sudo apt-get install -y libasound2
         playwright install chromium
-        playwright install-deps chromium
+        playwright install-deps chromium || true
     
     - name: Run Volo Bot
       if: success()
