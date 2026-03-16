@@ -1153,6 +1153,26 @@ class VoloBot:
                             signed_up_count += 1
                             logger.info(f"✅ Successfully signed up for pickup #{signed_up_count}!")
                             
+                            # Navigate back to pickups page to continue with next pickup
+                            # Only if there are more pickups to sign up for
+                            if pickup_index + 1 < len(matching_pickups):
+                                logger.info("Navigating back to pickups page for next signup...")
+                                try:
+                                    # Get the volleyball URL from environment or use default
+                                    volleyball_url = os.getenv('VOLO_VOLLEYBALL_URL', 
+                                        'https://www.volosports.com/discover?cityName=San%20Francisco&subView=DAILY&view=SPORTS&sportNames%5B0%5D=Volleyball')
+                                    page.goto(volleyball_url, wait_until='domcontentloaded', timeout=15000)
+                                    page.wait_for_timeout(2000)  # Wait for page to load
+                                    logger.info("✓ Returned to pickups page")
+                                except Exception as e:
+                                    logger.warning(f"Could not navigate back to pickups page: {e}")
+                                    # Try go_back as fallback
+                                    try:
+                                        page.go_back()
+                                        page.wait_for_timeout(2000)
+                                    except:
+                                        pass
+                            
                         else:
                             logger.warning("Could not find enabled Register button")
                             page.screenshot(path=f'register_button_not_found_{signed_up_count}.png')
