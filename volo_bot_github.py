@@ -278,65 +278,81 @@ class VoloBot:
                     found_price_value = None
                     
                     try:
-                        # Look for price elements - these should be in the area under the time (far right)
-                        price_selectors = [
-                            "[class*='price']",
-                            "[class*='cost']",
-                            "[class*='amount']",
-                            "[class*='fee']",
-                            "[data-testid*='price']",
-                        ]
+                        import re
                         
-                        # First, check if there are any price elements at all
-                        for price_selector in price_selectors:
-                            try:
-                                price_elements = event.query_selector_all(price_selector)
-                                if price_elements:
-                                    for price_elem in price_elements:
-                                        price_text = (price_elem.inner_text() or '').strip()
-                                        if price_text:
-                                            has_price_element = True
-                                            found_price_value = price_text
-                                            logger.info(f"  Found price element: '{price_text}'")
-                                            
-                                            # Check if it's $0 or free
-                                            price_lower = price_text.lower()
-                                            if any(ind in price_lower for ind in ["$0", "$0.00", "free", "0.00"]):
-                                                has_free_price = True
-                                                logger.info(f"  → Price is $0/free")
-                                            elif "$" in price_text or any(char.isdigit() for char in price_text):
-                                                # Has a price that's not $0
-                                                has_free_price = False
-                                                logger.info(f"  → Price is NOT free: {price_text}")
-                                            break
-                                    if has_price_element:
-                                        break
-                            except:
-                                continue
+                        # FIRST: Check for any price patterns in the event text/html (most reliable)
+                        # Look for $X or $X.XX patterns
+                        all_text = event_text + ' ' + event_html
+                        price_matches = re.findall(r'\$[\d.]+', all_text)
                         
-                        # If no price elements found at all, check for dollar signs in the event
-                        if not has_price_element:
-                            # Look for any dollar signs in the event text/html
-                            import re
-                            price_matches = re.findall(r'\$[\d.]+', event_text + ' ' + event_html)
+                        if price_matches:
+                            # Found price patterns in text
+                            has_price_element = True
+                            found_price_value = ', '.join(price_matches)
+                            logger.info(f"  Found price patterns in text: {price_matches}")
                             
-                            if price_matches:
-                                # Found price patterns in text
-                                has_price_element = True
-                                found_price_value = ', '.join(price_matches)
-                                logger.info(f"  Found price patterns in text: {price_matches}")
-                                
-                                # Check if any match is $0
-                                if any(p in ['$0', '$0.00', '$0.0'] for p in price_matches):
-                                    has_free_price = True
-                                    logger.info("  → Found $0 in text - event is FREE")
-                                else:
-                                    has_free_price = False
-                                    logger.info(f"  → Found prices in text: {price_matches} - NOT free")
-                            else:
-                                # No price element and no price patterns - it's FREE
+                            # Filter out $0 prices and check if any non-zero prices exist
+                            non_zero_prices = [p for p in price_matches if p not in ['$0', '$0.00', '$0.0', '$0.']]
+                            
+                            if non_zero_prices:
+                                # Has prices that are not $0
+                                has_free_price = False
+                                logger.info(f"  → Price is NOT free: {non_zero_prices}")
+                            elif any(p in ['$0', '$0.00', '$0.0'] for p in price_matches):
+                                # Only $0 prices found
                                 has_free_price = True
-                                logger.info("  → No price element found - event is FREE")
+                                logger.info("  → Found $0 in text - event is FREE")
+                            else:
+                                # Has price patterns but unclear - be conservative
+                                has_free_price = False
+                                logger.info(f"  → Found price patterns: {price_matches} - assuming NOT free")
+                        else:
+                            # No price patterns found in text, try looking for price elements
+                            price_selectors = [
+                                "[class*='price']",
+                                "[class*='cost']",
+                                "[class*='amount']",
+                                "[class*='fee']",
+                                "[data-testid*='price']",
+                            ]
+                            
+                            for price_selector in price_selectors:
+                                try:
+                                    price_elements = event.query_selector_all(price_selector)
+                                    if price_elements:
+                                        for price_elem in price_elements:
+                                            price_text = (price_elem.inner_text() or '').strip()
+                                            if price_text:
+                                                has_price_element = True
+                                                found_price_value = price_text
+                                                logger.info(f"  Found price element: '{price_text}'")
+                                                
+                                                # Check for price patterns in the element text
+                                                elem_price_matches = re.findall(r'\$[\d.]+', price_text)
+                                                if elem_price_matches:
+                                                    non_zero = [p for p in elem_price_matches if p not in ['$0', '$0.00', '$0.0']]
+                                                    if non_zero:
+                                                        has_free_price = False
+                                                        logger.info(f"  → Price element has non-zero price: {non_zero}")
+                                                        break
+                                                    elif any(p in ['$0', '$0.00', '$0.0'] for p in elem_price_matches):
+                                                        has_free_price = True
+                                                        logger.info(f"  → Price element is $0")
+                                                        break
+                                                elif "$" in price_text or any(char.isdigit() for char in price_text):
+                                                    # Has price-like text but no clear pattern
+                                                    has_free_price = False
+                                                    logger.info(f"  → Price element contains price-like text: {price_text}")
+                                                    break
+                                        if has_price_element:
+                                            break
+                                except:
+                                    continue
+                            
+                            # If still no price found, it's FREE
+                            if not has_price_element:
+                                has_free_price = True
+                                logger.info("  → No price element or price pattern found - event is FREE")
                     
                     except Exception as e:
                         logger.warning(f"  Error checking price: {e}")
