@@ -794,6 +794,81 @@ class VoloBot:
                                         event_url = href
                                     else:
                                         event_url = f"https://www.volosports.com/{href}"
+                            
+                            # Strategy 2: Check if the event itself is a link
+                            if not event_url:
+                                try:
+                                    event_tag = event.evaluate("el => el.tagName.toLowerCase()")
+                                    if event_tag == 'a':
+                                        href = event.get_attribute("href")
+                                        if href:
+                                            if href.startswith("/"):
+                                                event_url = f"https://www.volosports.com{href}"
+                                            elif href.startswith("http"):
+                                                event_url = href
+                                            else:
+                                                event_url = f"https://www.volosports.com/{href}"
+                                except:
+                                    pass
+                            
+                            # Strategy 3: Check for data attributes or onclick handlers
+                            if not event_url:
+                                try:
+                                    data_url = event.get_attribute("data-url")
+                                    data_href = event.get_attribute("data-href")
+                                    data_link = event.get_attribute("data-link")
+                                    
+                                    if data_url:
+                                        event_url = data_url if data_url.startswith("http") else f"https://www.volosports.com{data_url}"
+                                    elif data_href:
+                                        event_url = data_href if data_href.startswith("http") else f"https://www.volosports.com{data_href}"
+                                    elif data_link:
+                                        event_url = data_link if data_link.startswith("http") else f"https://www.volosports.com{data_link}"
+                                    else:
+                                        onclick = event.get_attribute("onclick")
+                                        if onclick and "location.href" in onclick:
+                                            # Extract URL from onclick handler
+                                            import re
+                                            url_match = re.search(r"location\.href\s*=\s*['\"]([^'\"]+)['\"]", onclick)
+                                            if url_match:
+                                                url = url_match.group(1)
+                                                event_url = url if url.startswith("http") else f"https://www.volosports.com{url}"
+                                except:
+                                    pass
+                            
+                            # Strategy 4: Use evaluate to find any clickable parent that has href
+                            if not event_url:
+                                try:
+                                    url_from_eval = event.evaluate("""
+                                        el => {
+                                            // Walk up the DOM to find a link
+                                            let current = el;
+                                            for (let i = 0; i < 5; i++) {
+                                                if (!current) break;
+                                                if (current.tagName === 'A' && current.href) {
+                                                    return current.href;
+                                                }
+                                                if (current.onclick && current.onclick.toString().includes('location.href')) {
+                                                    const match = current.onclick.toString().match(/location\\.href\\s*=\\s*['"]([^'"]+)['"]/);
+                                                    if (match) return match[1];
+                                                }
+                                                if (current.dataset && (current.dataset.url || current.dataset.href || current.dataset.link)) {
+                                                    return current.dataset.url || current.dataset.href || current.dataset.link;
+                                                }
+                                                current = current.parentElement;
+                                            }
+                                            return null;
+                                        }
+                                    """)
+                                    if url_from_eval:
+                                        if url_from_eval.startswith("/"):
+                                            event_url = f"https://www.volosports.com{url_from_eval}"
+                                        elif url_from_eval.startswith("http"):
+                                            event_url = url_from_eval
+                                        else:
+                                            event_url = f"https://www.volosports.com/{url_from_eval}"
+                                except:
+                                    pass
                         except:
                             pass
                         
@@ -919,13 +994,85 @@ class VoloBot:
                         pickup_page.wait_for_timeout(2000)
                     elif pickup_element:
                         # No URL, need to click element on original page
-                        logger.info("No URL found, clicking element to navigate...")
+                        # But first, make sure we're on the pickups page
+                        logger.info("No URL found, need to click element...")
                         try:
-                            pickup_element.scroll_into_view_if_needed()
-                            page.wait_for_timeout(500)
-                            pickup_element.click()
-                            page.wait_for_timeout(3000)
-                            pickup_page = page  # Use original page
+                            current_url = page.url
+                            volleyball_url = os.getenv('VOLO_VOLLEYBALL_URL', 
+                                'https://www.volosports.com/discover?cityName=San%20Francisco&subView=DAILY&view=SPORTS&sportNames%5B0%5D=Volleyball')
+                            
+                            # If we're not on the pickups page, navigate back
+                            if volleyball_url not in current_url:
+                                logger.info("Not on pickups page, navigating back...")
+                                page.goto(volleyball_url, wait_until='domcontentloaded', timeout=15000)
+                                page.wait_for_timeout(3000)
+                                
+                                # Re-find all matching pickups to get fresh element references
+                                logger.info("Re-finding matching pickups to get fresh element references...")
+                                fresh_pickups = self.find_matching_pickups(page)
+                                if fresh_pickups and pickup_index <= len(fresh_pickups):
+                                    fresh_pickup = fresh_pickups[pickup_index - 1]
+                                    if isinstance(fresh_pickup, dict):
+                                        pickup_element = fresh_pickup.get('element')
+                                        # Try to get URL from fresh element
+                                        if not pickup_url:
+                                            pickup_url = fresh_pickup.get('url')
+                                    else:
+                                        pickup_element = fresh_pickup
+                                    
+                                    # If we now have a URL, use it instead
+                                    if pickup_url:
+                                        logger.info(f"Found URL after re-finding: {pickup_url}")
+                                        pickup_page = context.new_page()
+                                        pickup_page.goto(pickup_url, wait_until='domcontentloaded', timeout=15000)
+                                        pickup_page.wait_for_timeout(2000)
+                                    else:
+                                        # Still no URL, click the element
+                                        logger.info("Clicking element to navigate...")
+                                        pickup_element.scroll_into_view_if_needed()
+                                        page.wait_for_timeout(500)
+                                        pickup_element.click()
+                                        page.wait_for_timeout(3000)
+                                        pickup_page = page  # Use original page
+                                else:
+                                    logger.warning(f"Could not re-find pickup {pickup_index}")
+                                    continue
+                            else:
+                                # We're on the pickups page, try clicking
+                                logger.info("Clicking element to navigate...")
+                                try:
+                                    pickup_element.scroll_into_view_if_needed()
+                                    page.wait_for_timeout(500)
+                                    pickup_element.click()
+                                    page.wait_for_timeout(3000)
+                                    pickup_page = page  # Use original page
+                                except Exception as click_error:
+                                    # Element might be detached, re-find
+                                    if "not attached" in str(click_error).lower() or "detached" in str(click_error).lower():
+                                        logger.info("Element detached, re-finding...")
+                                        fresh_pickups = self.find_matching_pickups(page)
+                                        if fresh_pickups and pickup_index <= len(fresh_pickups):
+                                            fresh_pickup = fresh_pickups[pickup_index - 1]
+                                            if isinstance(fresh_pickup, dict):
+                                                pickup_element = fresh_pickup.get('element')
+                                                pickup_url = fresh_pickup.get('url')
+                                            else:
+                                                pickup_element = fresh_pickup
+                                            
+                                            if pickup_url:
+                                                pickup_page = context.new_page()
+                                                pickup_page.goto(pickup_url, wait_until='domcontentloaded', timeout=15000)
+                                                pickup_page.wait_for_timeout(2000)
+                                            else:
+                                                pickup_element.scroll_into_view_if_needed()
+                                                page.wait_for_timeout(500)
+                                                pickup_element.click()
+                                                page.wait_for_timeout(3000)
+                                                pickup_page = page
+                                        else:
+                                            raise click_error
+                                    else:
+                                        raise click_error
                         except Exception as e:
                             logger.warning(f"Could not click element: {e}")
                             continue
