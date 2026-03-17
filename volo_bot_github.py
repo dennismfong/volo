@@ -860,9 +860,16 @@ class VoloBot:
                 return True
             
             # Sign up for each matching pickup
+            # Use a while loop so we can re-find pickups when elements become stale
             signed_up_count = 0
-            for pickup_index, pickup in enumerate(matching_pickups):
+            pickup_index = 0
+            max_attempts = len(matching_pickups) * 2  # Safety limit
+            attempts = 0
+            
+            while pickup_index < len(matching_pickups) and attempts < max_attempts:
+                attempts += 1
                 try:
+                    pickup = matching_pickups[pickup_index]
                     logger.info(f"Attempting to sign up for pickup {pickup_index + 1}/{len(matching_pickups)}...")
                     
                     # Click on the pickup card/event to go to detail page
@@ -875,18 +882,37 @@ class VoloBot:
                         page.wait_for_timeout(3000)  # Wait for detail page to load
                     except Exception as e:
                         logger.warning(f"Could not click pickup: {e}")
-                        # If element is detached, we're likely already on a detail page
-                        # Just skip this pickup and continue (don't re-search unnecessarily)
+                        # If element is detached, navigate back and re-find pickups
                         if "not attached" in str(e).lower() or "detached" in str(e).lower():
-                            logger.info("Element detached - likely already on detail page, skipping this pickup")
-                            # Try to go back if we're on a detail page
+                            logger.info("Element detached - navigating back and re-finding pickups...")
                             try:
-                                current_url = page.url
-                                if "event" in current_url.lower() or "pickup" in current_url.lower():
+                                volleyball_url = os.getenv('VOLO_VOLLEYBALL_URL', 
+                                    'https://www.volosports.com/discover?cityName=San%20Francisco&subView=DAILY&view=SPORTS&sportNames%5B0%5D=Volleyball')
+                                page.goto(volleyball_url, wait_until='domcontentloaded', timeout=15000)
+                                page.wait_for_timeout(3000)
+                                logger.info("✓ Returned to pickups page")
+                                
+                                # Re-find matching pickups since element references are stale
+                                matching_pickups = self.find_matching_pickups(page)
+                                if matching_pickups:
+                                    logger.info(f"Re-found {len(matching_pickups)} matching pickups")
+                                    # Break out of inner loop to restart with new elements
+                                    break
+                                else:
+                                    logger.warning("No matching pickups found after re-finding")
+                                    break
+                            except Exception as nav_error:
+                                logger.warning(f"Could not navigate back: {nav_error}")
+                                # Try go_back as fallback
+                                try:
                                     page.go_back()
-                                    page.wait_for_timeout(1000)
-                            except:
-                                pass
+                                    page.wait_for_timeout(2000)
+                                    matching_pickups = self.find_matching_pickups(page)
+                                    if matching_pickups:
+                                        logger.info(f"Re-found {len(matching_pickups)} matching pickups")
+                                        break
+                                except:
+                                    pass
                         continue
                     
                     # FIRST: Check if already registered - skip if so
@@ -905,21 +931,35 @@ class VoloBot:
                         
                         if is_already_registered:
                             logger.info("✓ Already registered for this pickup - skipping signup")
-                            # Navigate back to pickups page for next pickup
-                            if pickup_index + 1 < len(matching_pickups):
-                                logger.info("Navigating back to pickups page for next signup...")
+                            # Navigate back to pickups page and re-find pickups for next signup
+                            logger.info("Navigating back to pickups page...")
+                            try:
+                                volleyball_url = os.getenv('VOLO_VOLLEYBALL_URL', 
+                                    'https://www.volosports.com/discover?cityName=San%20Francisco&subView=DAILY&view=SPORTS&sportNames%5B0%5D=Volleyball')
+                                page.goto(volleyball_url, wait_until='domcontentloaded', timeout=15000)
+                                page.wait_for_timeout(3000)  # Wait for page to fully load
+                                logger.info("✓ Returned to pickups page")
+                                
+                                # Re-find matching pickups since element references are now stale
+                                logger.info("Re-finding matching pickups after navigation...")
+                                matching_pickups = self.find_matching_pickups(page)
+                                if matching_pickups:
+                                    logger.info(f"Re-found {len(matching_pickups)} matching pickups")
+                                    # Continue with the loop, but we need to break and restart since we have new elements
+                                    # Actually, we can't easily restart the loop, so we'll just continue
+                                    # The next iteration will try to click, and if it fails, we'll handle it
+                                else:
+                                    logger.warning("No matching pickups found after navigation")
+                            except:
                                 try:
-                                    volleyball_url = os.getenv('VOLO_VOLLEYBALL_URL', 
-                                        'https://www.volosports.com/discover?cityName=San%20Francisco&subView=DAILY&view=SPORTS&sportNames%5B0%5D=Volleyball')
-                                    page.goto(volleyball_url, wait_until='domcontentloaded', timeout=15000)
+                                    page.go_back()
                                     page.wait_for_timeout(2000)
-                                    logger.info("✓ Returned to pickups page")
+                                    # Re-find matching pickups
+                                    matching_pickups = self.find_matching_pickups(page)
+                                    if matching_pickups:
+                                        logger.info(f"Re-found {len(matching_pickups)} matching pickups")
                                 except:
-                                    try:
-                                        page.go_back()
-                                        page.wait_for_timeout(2000)
-                                    except:
-                                        pass
+                                    pass
                             continue  # Skip to next pickup
                     except Exception as e:
                         logger.debug(f"Error checking registration status: {e}")
@@ -1185,16 +1225,36 @@ class VoloBot:
                                     volleyball_url = os.getenv('VOLO_VOLLEYBALL_URL', 
                                         'https://www.volosports.com/discover?cityName=San%20Francisco&subView=DAILY&view=SPORTS&sportNames%5B0%5D=Volleyball')
                                     page.goto(volleyball_url, wait_until='domcontentloaded', timeout=15000)
-                                    page.wait_for_timeout(2000)  # Wait for page to load
+                                    page.wait_for_timeout(3000)  # Wait for page to fully load
                                     logger.info("✓ Returned to pickups page")
+                                    
+                                    # Re-find matching pickups since element references are now stale
+                                    logger.info("Re-finding matching pickups after navigation...")
+                                    matching_pickups = self.find_matching_pickups(page)
+                                    if matching_pickups:
+                                        logger.info(f"Re-found {len(matching_pickups)} matching pickups")
+                                        # Reset pickup_index to current position (or 0 if we want to restart)
+                                        # Since we already processed pickup_index, we can continue from there
+                                        # But we need to make sure we don't skip any
+                                        pickup_index = 0  # Restart from beginning with fresh elements
+                                    else:
+                                        logger.warning("No matching pickups found after navigation")
+                                        break
                                 except Exception as e:
                                     logger.warning(f"Could not navigate back to pickups page: {e}")
                                     # Try go_back as fallback
                                     try:
                                         page.go_back()
                                         page.wait_for_timeout(2000)
+                                        # Re-find matching pickups
+                                        matching_pickups = self.find_matching_pickups(page)
+                                        if matching_pickups:
+                                            logger.info(f"Re-found {len(matching_pickups)} matching pickups")
+                                            pickup_index = 0
+                                        else:
+                                            break
                                     except:
-                                        pass
+                                        break
                             
                         else:
                             logger.warning("Could not find enabled Register button")
