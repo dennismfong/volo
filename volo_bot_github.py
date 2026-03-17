@@ -860,17 +860,33 @@ class VoloBot:
                 return True
             
             # Sign up for each matching pickup
-            # Use a while loop so we can re-find pickups when elements become stale
+            # Track processed pickups by title to avoid infinite loops
             signed_up_count = 0
+            processed_pickup_titles = set()  # Track which pickups we've already processed
             pickup_index = 0
-            max_attempts = len(matching_pickups) * 2  # Safety limit
+            max_attempts = len(matching_pickups) * 3  # Safety limit
             attempts = 0
             
             while pickup_index < len(matching_pickups) and attempts < max_attempts:
                 attempts += 1
                 try:
                     pickup = matching_pickups[pickup_index]
-                    logger.info(f"Attempting to sign up for pickup {pickup_index + 1}/{len(matching_pickups)}...")
+                    
+                    # Get pickup title to track if we've processed it
+                    try:
+                        pickup_title = (pickup.inner_text() or "")[:200].strip()
+                        if not pickup_title:
+                            pickup_title = f"pickup_{pickup_index}"
+                    except:
+                        pickup_title = f"pickup_{pickup_index}"
+                    
+                    # Skip if we've already processed this pickup
+                    if pickup_title in processed_pickup_titles:
+                        logger.info(f"Skipping already processed pickup: {pickup_title[:100]}")
+                        pickup_index += 1
+                        continue
+                    
+                    logger.info(f"Attempting to sign up for pickup {pickup_index + 1}/{len(matching_pickups)}: {pickup_title[:100]}")
                     
                     # Click on the pickup card/event to go to detail page
                     try:
@@ -896,10 +912,12 @@ class VoloBot:
                                 matching_pickups = self.find_matching_pickups(page)
                                 if matching_pickups:
                                     logger.info(f"Re-found {len(matching_pickups)} matching pickups")
-                                    # Break out of inner loop to restart with new elements
+                                    # Mark current pickup as processed and break to restart
+                                    processed_pickup_titles.add(pickup_title)
                                     break
                                 else:
                                     logger.warning("No matching pickups found after re-finding")
+                                    processed_pickup_titles.add(pickup_title)
                                     break
                             except Exception as nav_error:
                                 logger.warning(f"Could not navigate back: {nav_error}")
@@ -910,10 +928,15 @@ class VoloBot:
                                     matching_pickups = self.find_matching_pickups(page)
                                     if matching_pickups:
                                         logger.info(f"Re-found {len(matching_pickups)} matching pickups")
+                                        # Mark current pickup as processed
+                                        processed_pickup_titles.add(pickup_title)
                                         break
                                 except:
                                     pass
-                        continue
+                            # Mark as processed and move to next
+                            processed_pickup_titles.add(pickup_title)
+                            pickup_index += 1
+                            continue
                     
                     # FIRST: Check if already registered - skip if so
                     logger.info("Checking if already registered...")
@@ -931,6 +954,9 @@ class VoloBot:
                         
                         if is_already_registered:
                             logger.info("✓ Already registered for this pickup - skipping signup")
+                            # Mark as processed
+                            processed_pickup_titles.add(pickup_title)
+                            
                             # Navigate back to pickups page and re-find pickups for next signup
                             logger.info("Navigating back to pickups page...")
                             try:
@@ -945,11 +971,11 @@ class VoloBot:
                                 matching_pickups = self.find_matching_pickups(page)
                                 if matching_pickups:
                                     logger.info(f"Re-found {len(matching_pickups)} matching pickups")
-                                    # Continue with the loop, but we need to break and restart since we have new elements
-                                    # Actually, we can't easily restart the loop, so we'll just continue
-                                    # The next iteration will try to click, and if it fails, we'll handle it
+                                    # Reset index to 0 to restart, but processed titles will prevent duplicates
+                                    pickup_index = 0
                                 else:
                                     logger.warning("No matching pickups found after navigation")
+                                    break
                             except:
                                 try:
                                     page.go_back()
@@ -958,8 +984,11 @@ class VoloBot:
                                     matching_pickups = self.find_matching_pickups(page)
                                     if matching_pickups:
                                         logger.info(f"Re-found {len(matching_pickups)} matching pickups")
+                                        pickup_index = 0
+                                    else:
+                                        break
                                 except:
-                                    pass
+                                    break
                             continue  # Skip to next pickup
                     except Exception as e:
                         logger.debug(f"Error checking registration status: {e}")
@@ -1233,12 +1262,12 @@ class VoloBot:
                                     matching_pickups = self.find_matching_pickups(page)
                                     if matching_pickups:
                                         logger.info(f"Re-found {len(matching_pickups)} matching pickups")
-                                        # Reset pickup_index to current position (or 0 if we want to restart)
-                                        # Since we already processed pickup_index, we can continue from there
-                                        # But we need to make sure we don't skip any
-                                        pickup_index = 0  # Restart from beginning with fresh elements
+                                        # Mark current pickup as processed and reset index
+                                        processed_pickup_titles.add(pickup_title)
+                                        pickup_index = 0  # Restart from beginning, but processed titles prevent duplicates
                                     else:
                                         logger.warning("No matching pickups found after navigation")
+                                        processed_pickup_titles.add(pickup_title)
                                         break
                                 except Exception as e:
                                     logger.warning(f"Could not navigate back to pickups page: {e}")
@@ -1250,8 +1279,10 @@ class VoloBot:
                                         matching_pickups = self.find_matching_pickups(page)
                                         if matching_pickups:
                                             logger.info(f"Re-found {len(matching_pickups)} matching pickups")
+                                            processed_pickup_titles.add(pickup_title)
                                             pickup_index = 0
                                         else:
+                                            processed_pickup_titles.add(pickup_title)
                                             break
                                     except:
                                         break
