@@ -779,7 +779,29 @@ class VoloBot:
                     
                     if has_free_price:
                         logger.info("✓ Event matches criteria: 'Volleyball Pickup' and $0/free")
-                        matching_pickups.append(event)
+                        # Try to extract the URL/link for this event
+                        event_url = None
+                        try:
+                            # Look for a link element within the event
+                            link = event.query_selector("a[href]")
+                            if link:
+                                href = link.get_attribute("href")
+                                if href:
+                                    # Make absolute URL if relative
+                                    if href.startswith("/"):
+                                        event_url = f"https://www.volosports.com{href}"
+                                    elif href.startswith("http"):
+                                        event_url = href
+                                    else:
+                                        event_url = f"https://www.volosports.com/{href}"
+                        except:
+                            pass
+                        
+                        matching_pickups.append({
+                            'element': event,
+                            'url': event_url,
+                            'title': event_text[:200] if event_text else f"pickup_{len(matching_pickups)}"
+                        })
                     else:
                         price_info = found_price_value or "has price (not $0)"
                         logger.info(f"✗ Event has 'Volleyball Pickup' but price is not $0: {price_info}")
@@ -845,10 +867,18 @@ class VoloBot:
             # Log what we found
             logger.info("=" * 60)
             logger.info(f"Found {len(matching_pickups)} matching pickup(s) for signup:")
-            for i, pickup in enumerate(matching_pickups, 1):
+            for i, pickup_info in enumerate(matching_pickups, 1):
                 try:
-                    pickup_text = pickup.inner_text()[:200] if pickup.inner_text() else "N/A"
-                    logger.info(f"  {i}. {pickup_text}")
+                    if isinstance(pickup_info, dict):
+                        title = pickup_info.get('title', 'N/A')
+                        url = pickup_info.get('url', 'No URL (will click)')
+                        logger.info(f"  {i}. {title[:100]}")
+                        if url:
+                            logger.info(f"      URL: {url}")
+                    else:
+                        # Legacy format
+                        pickup_text = pickup_info.inner_text()[:200] if pickup_info.inner_text() else "N/A"
+                        logger.info(f"  {i}. {pickup_text}")
                 except:
                     logger.info(f"  {i}. [Could not extract text]")
             logger.info("=" * 60)
@@ -859,449 +889,74 @@ class VoloBot:
                 logger.info(f"Would sign up for {len(matching_pickups)} pickup(s) if not in search-only mode")
                 return True
             
-            # Sign up for each matching pickup
-            # Track processed pickups by title to avoid infinite loops
+            # Sign up for each matching pickup using tabs
+            # Process each pickup in a new tab to avoid navigation issues
             signed_up_count = 0
-            processed_pickup_titles = set()  # Track which pickups we've already processed
-            pickup_index = 0
-            max_attempts = len(matching_pickups) * 3  # Safety limit
-            attempts = 0
+            context = page.context
             
-            while pickup_index < len(matching_pickups) and attempts < max_attempts:
-                attempts += 1
+            # Process each pickup
+            for pickup_index, pickup_info in enumerate(matching_pickups, 1):
+                # Extract pickup info
+                if isinstance(pickup_info, dict):
+                    pickup_title = pickup_info.get('title', f"pickup_{pickup_index}")
+                    pickup_url = pickup_info.get('url')
+                    pickup_element = pickup_info.get('element')
+                else:
+                    # Legacy format
+                    pickup_title = f"pickup_{pickup_index}"
+                    pickup_url = None
+                    pickup_element = pickup_info
+                
+                logger.info(f"Processing pickup {pickup_index}/{len(matching_pickups)}: {pickup_title[:100]}")
+                
+                pickup_page = None
                 try:
-                    pickup = matching_pickups[pickup_index]
-                    
-                    # Get pickup title to track if we've processed it
-                    try:
-                        pickup_title = (pickup.inner_text() or "")[:200].strip()
-                        if not pickup_title:
-                            pickup_title = f"pickup_{pickup_index}"
-                    except:
-                        pickup_title = f"pickup_{pickup_index}"
-                    
-                    # Skip if we've already processed this pickup
-                    if pickup_title in processed_pickup_titles:
-                        logger.info(f"Skipping already processed pickup: {pickup_title[:100]}")
-                        pickup_index += 1
+                    # Open pickup in a new tab
+                    if pickup_url:
+                        logger.info(f"Opening pickup URL in new tab: {pickup_url}")
+                        pickup_page = context.new_page()
+                        pickup_page.goto(pickup_url, wait_until='domcontentloaded', timeout=15000)
+                        pickup_page.wait_for_timeout(2000)
+                    elif pickup_element:
+                        # No URL, need to click element on original page
+                        logger.info("No URL found, clicking element to navigate...")
+                        try:
+                            pickup_element.scroll_into_view_if_needed()
+                            page.wait_for_timeout(500)
+                            pickup_element.click()
+                            page.wait_for_timeout(3000)
+                            pickup_page = page  # Use original page
+                        except Exception as e:
+                            logger.warning(f"Could not click element: {e}")
+                            continue
+                    else:
+                        logger.warning("No URL or element available")
                         continue
                     
-                    logger.info(f"Attempting to sign up for pickup {pickup_index + 1}/{len(matching_pickups)}: {pickup_title[:100]}")
+                    # Process this pickup page
+                    success = self._process_single_pickup(pickup_page, pickup_title)
+                    if success:
+                        signed_up_count += 1
+                        logger.info(f"✅ Successfully signed up for pickup #{signed_up_count}!")
                     
-                    # Click on the pickup card/event to go to detail page
-                    try:
-                        logger.info("Clicking on event to view details...")
-                        # Scroll into view first
-                        pickup.scroll_into_view_if_needed()
-                        page.wait_for_timeout(500)
-                        pickup.click()
-                        page.wait_for_timeout(3000)  # Wait for detail page to load
-                    except Exception as e:
-                        logger.warning(f"Could not click pickup: {e}")
-                        # If element is detached, navigate back and re-find pickups
-                        if "not attached" in str(e).lower() or "detached" in str(e).lower():
-                            logger.info("Element detached - navigating back and re-finding pickups...")
-                            try:
-                                volleyball_url = os.getenv('VOLO_VOLLEYBALL_URL', 
-                                    'https://www.volosports.com/discover?cityName=San%20Francisco&subView=DAILY&view=SPORTS&sportNames%5B0%5D=Volleyball')
-                                page.goto(volleyball_url, wait_until='domcontentloaded', timeout=15000)
-                                page.wait_for_timeout(3000)
-                                logger.info("✓ Returned to pickups page")
-                                
-                                # Re-find matching pickups since element references are stale
-                                matching_pickups = self.find_matching_pickups(page)
-                                if matching_pickups:
-                                    logger.info(f"Re-found {len(matching_pickups)} matching pickups")
-                                    # Mark current pickup as processed and break to restart
-                                    processed_pickup_titles.add(pickup_title)
-                                    break
-                                else:
-                                    logger.warning("No matching pickups found after re-finding")
-                                    processed_pickup_titles.add(pickup_title)
-                                    break
-                            except Exception as nav_error:
-                                logger.warning(f"Could not navigate back: {nav_error}")
-                                # Try go_back as fallback
-                                try:
-                                    page.go_back()
-                                    page.wait_for_timeout(2000)
-                                    matching_pickups = self.find_matching_pickups(page)
-                                    if matching_pickups:
-                                        logger.info(f"Re-found {len(matching_pickups)} matching pickups")
-                                        # Mark current pickup as processed
-                                        processed_pickup_titles.add(pickup_title)
-                                        break
-                                except:
-                                    pass
-                            # Mark as processed and move to next
-                            processed_pickup_titles.add(pickup_title)
-                            pickup_index += 1
-                            continue
-                    
-                    # FIRST: Check if already registered - skip if so
-                    logger.info("Checking if already registered...")
-                    try:
-                        page_text = page.locator('body').inner_text().lower()
-                        already_registered_phrases = [
-                            'you are already registered',
-                            'already registered',
-                            'you have already registered',
-                            'view registration',
-                            'already signed up',
-                        ]
-                        
-                        is_already_registered = any(phrase in page_text for phrase in already_registered_phrases)
-                        
-                        if is_already_registered:
-                            logger.info("✓ Already registered for this pickup - skipping signup")
-                            # Mark as processed
-                            processed_pickup_titles.add(pickup_title)
-                            
-                            # Navigate back to pickups page and re-find pickups for next signup
-                            logger.info("Navigating back to pickups page...")
-                            try:
-                                volleyball_url = os.getenv('VOLO_VOLLEYBALL_URL', 
-                                    'https://www.volosports.com/discover?cityName=San%20Francisco&subView=DAILY&view=SPORTS&sportNames%5B0%5D=Volleyball')
-                                page.goto(volleyball_url, wait_until='domcontentloaded', timeout=15000)
-                                page.wait_for_timeout(3000)  # Wait for page to fully load
-                                logger.info("✓ Returned to pickups page")
-                                
-                                # Re-find matching pickups since element references are now stale
-                                logger.info("Re-finding matching pickups after navigation...")
-                                matching_pickups = self.find_matching_pickups(page)
-                                if matching_pickups:
-                                    logger.info(f"Re-found {len(matching_pickups)} matching pickups")
-                                    # Reset index to 0 to restart, but processed titles will prevent duplicates
-                                    pickup_index = 0
-                                else:
-                                    logger.warning("No matching pickups found after navigation")
-                                    break
-                            except:
-                                try:
-                                    page.go_back()
-                                    page.wait_for_timeout(2000)
-                                    # Re-find matching pickups
-                                    matching_pickups = self.find_matching_pickups(page)
-                                    if matching_pickups:
-                                        logger.info(f"Re-found {len(matching_pickups)} matching pickups")
-                                        pickup_index = 0
-                                    else:
-                                        break
-                                except:
-                                    break
-                            continue  # Skip to next pickup
-                    except Exception as e:
-                        logger.debug(f"Error checking registration status: {e}")
-                    
-                    # SECOND CHECK: Verify "Order Total" is $0.00 on the detail page
-                    # This is a safety check in case price didn't show on the list page
-                    logger.info("Verifying Order Total is $0.00 on detail page...")
-                    order_total_is_zero = False
-                    
-                    try:
-                        # Get the page text and search for "Order Total"
-                        # Use body element to get all text
-                        page_text = page.locator('body').inner_text()
-                        import re
-                        
-                        # Look for "Order Total" followed by a price
-                        # Pattern: "Order Total" (optional colon/whitespace) then $X.XX or $X
-                        order_total_pattern = r'order\s+total\s*:?\s*(\$[\d.]+)'
-                        match = re.search(order_total_pattern, page_text, re.IGNORECASE)
-                        
-                        if match:
-                            price_found = match.group(1)
-                            logger.info(f"Found Order Total: {price_found}")
-                            
-                            # Check if it's $0.00 (normalize formats)
-                            price_normalized = price_found.replace('.00', '').replace('.0', '')
-                            if price_normalized == '$0':
-                                order_total_is_zero = True
-                                logger.info("✓ Order Total is $0.00 - verified!")
-                            else:
-                                order_total_is_zero = False
-                                logger.info(f"✗ Order Total is NOT $0.00: {price_found}")
-                        else:
-                            # Order Total text not found - might be in different format
-                            # Try alternative patterns
-                            total_patterns = [
-                                r'total\s*:?\s*(\$[\d.]+)',
-                                r'order\s+total[^\$]*(\$[\d.]+)',
-                            ]
-                            total_match = None
-                            for pattern in total_patterns:
-                                total_match = re.search(pattern, page_text, re.IGNORECASE)
-                                if total_match:
-                                    break
-                            
-                            if total_match:
-                                price_found = total_match.group(1)
-                                price_normalized = price_found.replace('.00', '').replace('.0', '')
-                                if price_normalized == '$0':
-                                    order_total_is_zero = True
-                                    logger.info(f"✓ Order Total is $0.00 - verified! (found via alternative pattern)")
-                                else:
-                                    order_total_is_zero = False
-                                    logger.info(f"✗ Order Total is NOT $0.00: {price_found}")
-                            else:
-                                # Could not find Order Total - log warning but continue
-                                logger.warning("Could not find 'Order Total' on page, assuming it's $0.00 (passed initial check)")
-                                order_total_is_zero = True  # Assume it's free since it passed initial check
-                                all_prices = re.findall(r'\$[\d.]+', page_text)
-                                if all_prices:
-                                    # There are prices but none near "total" - might be free
-                                    logger.info(f"Found prices on page but none near 'total': {all_prices}")
-                                    # Check if any are $0
-                                    if any(p in ['$0', '$0.00', '$0.0'] for p in all_prices):
-                                        order_total_is_zero = True
-                                        logger.info("✓ Found $0.00 on page - assuming it's the order total")
-                                    else:
-                                        # Has prices but not $0 - might not be free
-                                        logger.warning("Found prices on page but none are $0 - being cautious")
-                                        order_total_is_zero = False
-                                else:
-                                    # No prices found at all - likely free
-                                    order_total_is_zero = True
-                                    logger.info("No prices found on page - assuming Order Total is $0.00")
-                        
-                        if not order_total_is_zero:
-                            logger.warning("✗ Order Total is NOT $0.00 - skipping this pickup")
-                            # Go back to the list page
-                            try:
-                                page.go_back()
-                                page.wait_for_timeout(2000)
-                            except:
-                                pass
-                            continue
-                        else:
-                            logger.info("✓ Order Total verification passed - proceeding with signup")
-                        
-                    except Exception as e:
-                        logger.warning(f"Error verifying Order Total: {e}")
-                        # If verification fails, continue anyway (since it passed initial check)
-                        logger.info("Continuing with signup despite Order Total check error (passed initial check)...")
-                    
-                    # On the detail page, we need to:
-                    # 1. Check both waiver/agreement checkboxes
-                    # 2. Wait for Register button to become enabled
-                    # 3. Click Register button
-                    
-                    try:
-                        # Find and check the waiver/agreement checkboxes
-                        logger.info("Looking for waiver/agreement checkboxes...")
-                        
-                        # Try to find checkboxes within waiver/agreement sections first
-                        # Look for checkboxes near text containing "waiver", "agreement", "liability", etc.
-                        waiver_checkboxes = []
-                        
-                        # Strategy 1: Find checkboxes near waiver-related text using locators
+                except Exception as e:
+                    logger.error(f"Error processing pickup {pickup_index}: {e}")
+                finally:
+                    # Close the tab if we opened a new one
+                    if pickup_page and pickup_page != page and pickup_url:
                         try:
-                            # Find all checkboxes first
-                            all_checkboxes = page.query_selector_all("input[type='checkbox']")
-                            
-                            # For each checkbox, check if it's near waiver text
-                            for checkbox in all_checkboxes:
-                                try:
-                                    if checkbox.is_checked():
-                                        continue
-                                    
-                                    # Get the checkbox's parent container text
-                                    # Use evaluate to check if parent contains waiver text
-                                    is_waiver_checkbox = checkbox.evaluate("""
-                                        el => {
-                                            // Walk up to find parent with text
-                                            let current = el;
-                                            for (let i = 0; i < 5; i++) {
-                                                if (!current || !current.parentElement) break;
-                                                current = current.parentElement;
-                                                const text = (current.innerText || '').toLowerCase();
-                                                // Check if this container has waiver-related text
-                                                if (text.includes('waiver') || text.includes('agreement') || 
-                                                    text.includes('liability') || text.includes('code of conduct') ||
-                                                    text.includes('player code')) {
-                                                    return true;
-                                                }
-                                            }
-                                            return false;
-                                        }
-                                    """)
-                                    
-                                    if is_waiver_checkbox:
-                                        waiver_checkboxes.append(checkbox)
-                                        if len(waiver_checkboxes) >= 2:
-                                            break
-                                except:
-                                    pass
+                            pickup_page.close()
                         except:
                             pass
-                        
-                        # Strategy 2: Fallback - if still not enough, use first 2 unchecked checkboxes
-                        if len(waiver_checkboxes) < 2:
-                            all_checkboxes = page.query_selector_all("input[type='checkbox']")
-                            for checkbox in all_checkboxes:
-                                try:
-                                    if not checkbox.is_checked() and checkbox not in waiver_checkboxes:
-                                        waiver_checkboxes.append(checkbox)
-                                        if len(waiver_checkboxes) >= 2:
-                                            break
-                                except:
-                                    pass
-                        
-                        logger.info(f"Found {len(waiver_checkboxes)} waiver/agreement checkbox(es)")
-                        
-                        # We need exactly 2 checkboxes (waiver/agreement)
-                        if len(waiver_checkboxes) >= 2:
-                            logger.info(f"Checking {len(waiver_checkboxes)} waiver checkbox(es)...")
-                            for i, checkbox in enumerate(waiver_checkboxes[:2], 1):  # Check first 2
-                                try:
-                                    # Scroll checkbox into view first
-                                    checkbox.scroll_into_view_if_needed()
-                                    page.wait_for_timeout(300)
-                                    # Use click for better reliability
-                                    checkbox.click()
-                                    logger.info(f"✓ Checked checkbox {i}/2")
-                                    page.wait_for_timeout(500)  # Small delay between checks
-                                except Exception as e:
-                                    logger.warning(f"Could not check checkbox {i}: {e}")
-                        elif len(waiver_checkboxes) == 1:
-                            logger.info("Found 1 waiver checkbox, checking it...")
-                            try:
-                                waiver_checkboxes[0].scroll_into_view_if_needed()
-                                page.wait_for_timeout(300)
-                                waiver_checkboxes[0].click()
-                                logger.info("✓ Checked checkbox")
-                                page.wait_for_timeout(500)
-                            except Exception as e:
-                                logger.warning(f"Could not check checkbox: {e}")
-                        else:
-                            logger.warning(f"Expected 1-2 waiver checkboxes but found {len(waiver_checkboxes)}")
-                        
-                        # Wait for Register button to become enabled after checking boxes
-                        logger.info("Waiting for Register button to become enabled...")
-                        page.wait_for_timeout(1500)  # Give time for button to enable
-                        
-                        # Now find and click the Register button
-                        logger.info("Looking for Register button...")
-                        register_button = None
-                        register_selectors = [
-                            "button:has-text('Register')",
-                            "button[class*='register']:not([disabled])",
-                            "button[id*='register']:not([disabled])",
-                            "[data-testid*='register']:not([disabled])",
-                            "button:has-text('Sign Up')",
-                            "button:has-text('Join')",
-                        ]
-                        
-                        for selector in register_selectors:
-                            try:
-                                register_button = page.wait_for_selector(selector, timeout=5000)
-                                if register_button:
-                                    # Check if button is enabled (not disabled)
-                                    is_disabled = register_button.get_attribute('disabled')
-                                    if not is_disabled or is_disabled == 'false':
-                                        logger.info(f"Found enabled Register button using: {selector}")
-                                        break
-                                    else:
-                                        logger.info("Register button found but is disabled, waiting...")
-                                        # Wait a bit more and try again
-                                        page.wait_for_timeout(2000)
-                                        is_disabled = register_button.get_attribute('disabled')
-                                        if not is_disabled or is_disabled == 'false':
-                                            break
-                                        register_button = None
-                            except:
-                                continue
-                        
-                        if register_button:
-                            # Scroll button into view if not already
-                            try:
-                                register_button.scroll_into_view_if_needed()
-                                page.wait_for_timeout(300)
-                            except:
-                                pass
-                            register_button.click()
-                            logger.info("✓ Clicked Register button")
+                    elif pickup_page == page and pickup_url is None:
+                        # If we used the original page, navigate back
+                        try:
+                            volleyball_url = os.getenv('VOLO_VOLLEYBALL_URL', 
+                                'https://www.volosports.com/discover?cityName=San%20Francisco&subView=DAILY&view=SPORTS&sportNames%5B0%5D=Volleyball')
+                            page.goto(volleyball_url, wait_until='domcontentloaded', timeout=15000)
                             page.wait_for_timeout(2000)
-                            
-                            # Check for any confirmation dialogs or success messages
-                            try:
-                                confirm_selectors = [
-                                    "button:has-text('Confirm')",
-                                    "button:has-text('Complete')",
-                                    "button[class*='confirm']",
-                                ]
-                                for selector in confirm_selectors:
-                                    try:
-                                        confirm_button = page.wait_for_selector(selector, timeout=3000)
-                                        if confirm_button:
-                                            confirm_button.click()
-                                            logger.info("✓ Confirmed registration")
-                                            break
-                                    except:
-                                        continue
-                            except Exception as e:
-                                logger.info(f"No additional confirmation needed: {e}")
-                            
-                            signed_up_count += 1
-                            logger.info(f"✅ Successfully signed up for pickup #{signed_up_count}!")
-                            
-                            # Navigate back to pickups page to continue with next pickup
-                            # Only if there are more pickups to sign up for
-                            if pickup_index + 1 < len(matching_pickups):
-                                logger.info("Navigating back to pickups page for next signup...")
-                                try:
-                                    # Get the volleyball URL from environment or use default
-                                    volleyball_url = os.getenv('VOLO_VOLLEYBALL_URL', 
-                                        'https://www.volosports.com/discover?cityName=San%20Francisco&subView=DAILY&view=SPORTS&sportNames%5B0%5D=Volleyball')
-                                    page.goto(volleyball_url, wait_until='domcontentloaded', timeout=15000)
-                                    page.wait_for_timeout(3000)  # Wait for page to fully load
-                                    logger.info("✓ Returned to pickups page")
-                                    
-                                    # Re-find matching pickups since element references are now stale
-                                    logger.info("Re-finding matching pickups after navigation...")
-                                    matching_pickups = self.find_matching_pickups(page)
-                                    if matching_pickups:
-                                        logger.info(f"Re-found {len(matching_pickups)} matching pickups")
-                                        # Mark current pickup as processed and reset index
-                                        processed_pickup_titles.add(pickup_title)
-                                        pickup_index = 0  # Restart from beginning, but processed titles prevent duplicates
-                                    else:
-                                        logger.warning("No matching pickups found after navigation")
-                                        processed_pickup_titles.add(pickup_title)
-                                        break
-                                except Exception as e:
-                                    logger.warning(f"Could not navigate back to pickups page: {e}")
-                                    # Try go_back as fallback
-                                    try:
-                                        page.go_back()
-                                        page.wait_for_timeout(2000)
-                                        # Re-find matching pickups
-                                        matching_pickups = self.find_matching_pickups(page)
-                                        if matching_pickups:
-                                            logger.info(f"Re-found {len(matching_pickups)} matching pickups")
-                                            processed_pickup_titles.add(pickup_title)
-                                            pickup_index = 0
-                                        else:
-                                            processed_pickup_titles.add(pickup_title)
-                                            break
-                                    except:
-                                        break
-                            
-                        else:
-                            logger.warning("Could not find enabled Register button")
-                            page.screenshot(path=f'register_button_not_found_{signed_up_count}.png')
-                    
-                    except Exception as e:
-                        logger.error(f"Error during registration process: {e}")
-                        page.screenshot(path=f'registration_error_{signed_up_count}.png')
-                        continue
-                    
-                    # Go back to list if needed for next pickup
-                    page.wait_for_timeout(1000)
-                        
-                except Exception as e:
-                    logger.error(f"Error signing up for pickup: {e}")
-                    continue
+                        except:
+                            pass
             
             if signed_up_count > 0:
                 logger.info(f"Successfully signed up for {signed_up_count} matching pickup(s)!")
@@ -1314,6 +969,234 @@ class VoloBot:
         except Exception as e:
             logger.error(f"Signup failed: {e}")
             page.screenshot(path='signup_error.png')
+            return False
+    
+    def _process_single_pickup(self, pickup_page, pickup_title):
+        """Process a single pickup page - check registration, verify price, sign up"""
+        try:
+            # Check if already registered
+            logger.info("Checking if already registered...")
+            try:
+                page_text = pickup_page.locator('body').inner_text().lower()
+                already_registered_phrases = [
+                    'you are already registered',
+                    'already registered',
+                    'you have already registered',
+                    'view registration',
+                    'already signed up',
+                ]
+                
+                if any(phrase in page_text for phrase in already_registered_phrases):
+                    logger.info("✓ Already registered for this pickup - skipping signup")
+                    return False
+            except Exception as e:
+                logger.debug(f"Error checking registration status: {e}")
+            
+            # Verify Order Total is $0.00
+            logger.info("Verifying Order Total is $0.00 on detail page...")
+            order_total_is_zero = False
+            
+            try:
+                page_text = pickup_page.locator('body').inner_text()
+                import re
+                
+                order_total_pattern = r'order\s+total\s*:?\s*(\$[\d.]+)'
+                match = re.search(order_total_pattern, page_text, re.IGNORECASE)
+                
+                if match:
+                    price_found = match.group(1)
+                    logger.info(f"Found Order Total: {price_found}")
+                    
+                    price_normalized = price_found.replace('.00', '').replace('.0', '')
+                    if price_normalized == '$0':
+                        order_total_is_zero = True
+                        logger.info("✓ Order Total is $0.00 - verified!")
+                    else:
+                        order_total_is_zero = False
+                        logger.info(f"✗ Order Total is NOT $0.00: {price_found}")
+                else:
+                    # Try alternative patterns
+                    total_patterns = [
+                        r'total\s*:?\s*(\$[\d.]+)',
+                        r'order\s+total[^\$]*(\$[\d.]+)',
+                    ]
+                    total_match = None
+                    for pattern in total_patterns:
+                        total_match = re.search(pattern, page_text, re.IGNORECASE)
+                        if total_match:
+                            break
+                    
+                    if total_match:
+                        price_found = total_match.group(1)
+                        price_normalized = price_found.replace('.00', '').replace('.0', '')
+                        if price_normalized == '$0':
+                            order_total_is_zero = True
+                            logger.info(f"✓ Order Total is $0.00 - verified! (found via alternative pattern)")
+                        else:
+                            order_total_is_zero = False
+                            logger.info(f"✗ Order Total is NOT $0.00: {price_found}")
+                    else:
+                        logger.warning("Could not find 'Order Total' on page, assuming it's $0.00 (passed initial check)")
+                        order_total_is_zero = True
+                
+                if not order_total_is_zero:
+                    logger.warning("✗ Order Total is NOT $0.00 - skipping this pickup")
+                    return False
+                else:
+                    logger.info("✓ Order Total verification passed - proceeding with signup")
+                    
+            except Exception as e:
+                logger.warning(f"Error verifying Order Total: {e}")
+                logger.info("Continuing with signup despite Order Total check error (passed initial check)...")
+            
+            # Find and check waiver checkboxes
+            logger.info("Looking for waiver/agreement checkboxes...")
+            waiver_checkboxes = []
+            
+            try:
+                all_checkboxes = pickup_page.query_selector_all("input[type='checkbox']")
+                
+                for checkbox in all_checkboxes:
+                    try:
+                        if checkbox.is_checked():
+                            continue
+                        
+                        is_waiver_checkbox = checkbox.evaluate("""
+                            el => {
+                                let current = el;
+                                for (let i = 0; i < 5; i++) {
+                                    if (!current || !current.parentElement) break;
+                                    current = current.parentElement;
+                                    const text = (current.innerText || '').toLowerCase();
+                                    if (text.includes('waiver') || text.includes('agreement') || 
+                                        text.includes('liability') || text.includes('code of conduct') ||
+                                        text.includes('player code')) {
+                                        return true;
+                                    }
+                                }
+                                return false;
+                            }
+                        """)
+                        
+                        if is_waiver_checkbox:
+                            waiver_checkboxes.append(checkbox)
+                            if len(waiver_checkboxes) >= 2:
+                                break
+                    except:
+                        pass
+            except:
+                pass
+            
+            # Fallback: use first 2 unchecked checkboxes
+            if len(waiver_checkboxes) < 2:
+                all_checkboxes = pickup_page.query_selector_all("input[type='checkbox']")
+                for checkbox in all_checkboxes:
+                    try:
+                        if not checkbox.is_checked() and checkbox not in waiver_checkboxes:
+                            waiver_checkboxes.append(checkbox)
+                            if len(waiver_checkboxes) >= 2:
+                                break
+                    except:
+                        pass
+            
+            logger.info(f"Found {len(waiver_checkboxes)} waiver/agreement checkbox(es)")
+            
+            # Check the checkboxes
+            if len(waiver_checkboxes) >= 2:
+                logger.info(f"Checking {len(waiver_checkboxes)} waiver checkbox(es)...")
+                for i, checkbox in enumerate(waiver_checkboxes[:2], 1):
+                    try:
+                        checkbox.scroll_into_view_if_needed()
+                        pickup_page.wait_for_timeout(300)
+                        checkbox.click()
+                        logger.info(f"✓ Checked checkbox {i}/2")
+                        pickup_page.wait_for_timeout(500)
+                    except Exception as e:
+                        logger.warning(f"Could not check checkbox {i}: {e}")
+            elif len(waiver_checkboxes) == 1:
+                logger.info("Found 1 waiver checkbox, checking it...")
+                try:
+                    waiver_checkboxes[0].scroll_into_view_if_needed()
+                    pickup_page.wait_for_timeout(300)
+                    waiver_checkboxes[0].click()
+                    logger.info("✓ Checked checkbox")
+                    pickup_page.wait_for_timeout(500)
+                except Exception as e:
+                    logger.warning(f"Could not check checkbox: {e}")
+            else:
+                logger.warning(f"Expected 1-2 waiver checkboxes but found {len(waiver_checkboxes)}")
+            
+            # Wait for Register button to become enabled
+            logger.info("Waiting for Register button to become enabled...")
+            pickup_page.wait_for_timeout(1500)
+            
+            # Find and click Register button
+            logger.info("Looking for Register button...")
+            register_button = None
+            register_selectors = [
+                "button:has-text('Register')",
+                "button[class*='register']:not([disabled])",
+                "button[id*='register']:not([disabled])",
+                "[data-testid*='register']:not([disabled])",
+                "button:has-text('Sign Up')",
+                "button:has-text('Join')",
+            ]
+            
+            for selector in register_selectors:
+                try:
+                    register_button = pickup_page.wait_for_selector(selector, timeout=5000)
+                    if register_button:
+                        is_disabled = register_button.get_attribute('disabled')
+                        if not is_disabled or is_disabled == 'false':
+                            logger.info(f"Found enabled Register button using: {selector}")
+                            break
+                        else:
+                            pickup_page.wait_for_timeout(2000)
+                            is_disabled = register_button.get_attribute('disabled')
+                            if not is_disabled or is_disabled == 'false':
+                                break
+                            register_button = None
+                except:
+                    continue
+            
+            if register_button:
+                try:
+                    register_button.scroll_into_view_if_needed()
+                    pickup_page.wait_for_timeout(300)
+                except:
+                    pass
+                register_button.click()
+                logger.info("✓ Clicked Register button")
+                pickup_page.wait_for_timeout(2000)
+                
+                # Check for confirmation dialogs
+                try:
+                    confirm_selectors = [
+                        "button:has-text('Confirm')",
+                        "button:has-text('Complete')",
+                        "button[class*='confirm']",
+                    ]
+                    for selector in confirm_selectors:
+                        try:
+                            confirm_button = pickup_page.wait_for_selector(selector, timeout=3000)
+                            if confirm_button:
+                                confirm_button.click()
+                                logger.info("✓ Confirmed registration")
+                                break
+                        except:
+                            continue
+                except Exception as e:
+                    logger.info(f"No additional confirmation needed: {e}")
+                
+                return True
+            else:
+                logger.warning("Could not find enabled Register button")
+                pickup_page.screenshot(path=f'register_button_not_found.png')
+                return False
+                
+        except Exception as e:
+            logger.error(f"Error processing pickup: {e}")
+            pickup_page.screenshot(path=f'pickup_error.png')
             return False
     
     def run(self):
