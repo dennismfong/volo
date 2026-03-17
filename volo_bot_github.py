@@ -958,20 +958,24 @@ class VoloBot:
                         except:
                             pass
                         
-                        # Only store if we have a URL - we'll skip if we can't find one
+                        # Store the pickup - we'll use URL if available, otherwise click the element
+                        # Extract concise title
+                        title = event_text.split('\n')[0].strip() if '\n' in event_text else event_text
+                        if len(title) > 80:
+                            title = title[:80] + "..."
+                        
+                        pickup_data = {
+                            'title': title,
+                            'element': event,  # Store element for clicking if no URL
+                        }
+                        
                         if event_url:
-                            # Extract concise title
-                            title = event_text.split('\n')[0].strip() if '\n' in event_text else event_text
-                            if len(title) > 80:
-                                title = title[:80] + "..."
-                            
-                            matching_pickups.append({
-                                'url': event_url,
-                                'title': title
-                            })
+                            pickup_data['url'] = event_url
                             logger.info(f"    → URL: {event_url[:60]}...")
                         else:
-                            logger.warning(f"    ⚠ Could not extract URL - will skip")
+                            logger.info(f"    → Will click element (no URL found)")
+                        
+                        matching_pickups.append(pickup_data)
                     else:
                         logger.info(f"    → NOT free")
                         
@@ -1063,45 +1067,123 @@ class VoloBot:
             signed_up_count = 0
             context = page.context
             
-            # Process each pickup by URL only (no elements to avoid detachment)
+            # Process each pickup - use URL if available, otherwise click element
             for pickup_index, pickup_info in enumerate(matching_pickups, 1):
-                # Extract pickup info - should always be a dict with url and title
+                # Extract pickup info
                 if not isinstance(pickup_info, dict):
                     logger.warning(f"Invalid pickup info format for pickup {pickup_index}, skipping")
                     continue
                 
                 pickup_title = pickup_info.get('title', f"pickup_{pickup_index}")
                 pickup_url = pickup_info.get('url')
-                
-                if not pickup_url:
-                    logger.warning(f"No URL for pickup {pickup_index} ({pickup_title[:80]}), skipping")
-                    continue
+                pickup_element = pickup_info.get('element')
                 
                 logger.info(f"Processing pickup {pickup_index}/{len(matching_pickups)}: {pickup_title}")
                 
                 pickup_page = None
                 try:
-                    # Always open in a new tab using the URL (no element clicking, no re-searching)
-                    logger.info(f"Opening pickup URL in new tab: {pickup_url}")
-                    pickup_page = context.new_page()
-                    pickup_page.goto(pickup_url, wait_until='domcontentloaded', timeout=30000)
-                    pickup_page.wait_for_timeout(3000)
+                    if pickup_url:
+                        # Use URL - open in new tab
+                        logger.info(f"    Opening URL in new tab: {pickup_url[:60]}...")
+                        pickup_page = context.new_page()
+                        pickup_page.goto(pickup_url, wait_until='domcontentloaded', timeout=30000)
+                        pickup_page.wait_for_timeout(3000)
+                    elif pickup_element:
+                        # No URL - click element on original page
+                        logger.info(f"    Clicking element to navigate...")
+                        # Make sure we're on the pickups page
+                        current_url = page.url
+                        volleyball_url = os.getenv('VOLO_VOLLEYBALL_URL', 
+                            'https://www.volosports.com/discover?cityName=San%20Francisco&subView=DAILY&view=SPORTS&sportNames%5B0%5D=Volleyball')
+                        
+                        if volleyball_url not in current_url:
+                            logger.info(f"    Navigating back to pickups page...")
+                            page.goto(volleyball_url, wait_until='domcontentloaded', timeout=15000)
+                            page.wait_for_timeout(2000)
+                            # Re-find the element since we navigated
+                            fresh_pickups = self.find_matching_pickups(page)
+                            if fresh_pickups and pickup_index <= len(fresh_pickups):
+                                fresh_pickup = fresh_pickups[pickup_index - 1]
+                                if isinstance(fresh_pickup, dict):
+                                    pickup_element = fresh_pickup.get('element')
+                                    # Try to get URL from fresh element
+                                    if not pickup_url:
+                                        pickup_url = fresh_pickup.get('url')
+                        
+                        if pickup_url:
+                            # Got URL after re-finding, use it
+                            logger.info(f"    Found URL after re-finding: {pickup_url[:60]}...")
+                            pickup_page = context.new_page()
+                            pickup_page.goto(pickup_url, wait_until='domcontentloaded', timeout=30000)
+                            pickup_page.wait_for_timeout(3000)
+                        elif pickup_element:
+                            # Click the element
+                            try:
+                                pickup_element.scroll_into_view_if_needed()
+                                page.wait_for_timeout(500)
+                                pickup_element.click()
+                                page.wait_for_timeout(3000)
+                                pickup_page = page  # Use original page
+                            except Exception as click_error:
+                                if "not attached" in str(click_error).lower() or "detached" in str(click_error).lower():
+                                    logger.warning(f"    Element detached, re-finding...")
+                                    fresh_pickups = self.find_matching_pickups(page)
+                                    if fresh_pickups and pickup_index <= len(fresh_pickups):
+                                        fresh_pickup = fresh_pickups[pickup_index - 1]
+                                        if isinstance(fresh_pickup, dict):
+                                            pickup_element = fresh_pickup.get('element')
+                                            pickup_url = fresh_pickup.get('url')
+                                        
+                                        if pickup_url:
+                                            pickup_page = context.new_page()
+                                            pickup_page.goto(pickup_url, wait_until='domcontentloaded', timeout=30000)
+                                            pickup_page.wait_for_timeout(3000)
+                                        elif pickup_element:
+                                            pickup_element.scroll_into_view_if_needed()
+                                            page.wait_for_timeout(500)
+                                            pickup_element.click()
+                                            page.wait_for_timeout(3000)
+                                            pickup_page = page
+                                        else:
+                                            raise click_error
+                                    else:
+                                        raise click_error
+                                else:
+                                    raise click_error
+                        else:
+                            logger.warning(f"    No URL or element available - skipping")
+                            continue
+                    else:
+                        logger.warning(f"    No URL or element available - skipping")
+                        continue
                     
                     # Process this pickup page
-                    success = self._process_single_pickup(pickup_page, pickup_title)
-                    if success:
-                        signed_up_count += 1
-                        logger.info(f"✅ Successfully signed up for pickup #{signed_up_count}!")
+                    if pickup_page:
+                        success = self._process_single_pickup(pickup_page, pickup_title)
+                        if success:
+                            signed_up_count += 1
+                            logger.info(f"✅ Successfully signed up for pickup #{signed_up_count}!")
                     
                 except Exception as e:
                     logger.error(f"Error processing pickup {pickup_index}: {e}")
                 finally:
-                    # Always close the tab since we always open new tabs
+                    # Cleanup
                     if pickup_page and pickup_page != page:
+                        # Close tab if we opened a new one
                         try:
                             pickup_page.close()
                         except Exception as e:
                             logger.debug(f"Error closing tab: {e}")
+                    elif pickup_page == page and not pickup_url:
+                        # If we used the original page, navigate back
+                        try:
+                            volleyball_url = os.getenv('VOLO_VOLLEYBALL_URL', 
+                                'https://www.volosports.com/discover?cityName=San%20Francisco&subView=DAILY&view=SPORTS&sportNames%5B0%5D=Volleyball')
+                            page.goto(volleyball_url, wait_until='domcontentloaded', timeout=15000)
+                            page.wait_for_timeout(2000)
+                            logger.info(f"    Returned to pickups page")
+                        except Exception as e:
+                            logger.warning(f"Could not navigate back to pickups page: {e}")
             
             if signed_up_count > 0:
                 logger.info(f"Successfully signed up for {signed_up_count} matching pickup(s)!")
