@@ -695,15 +695,15 @@ class VoloBot:
                             if non_zero_prices:
                                 # Has prices that are not $0
                                 has_free_price = False
-                                logger.info(f"  → Price: {', '.join(non_zero_prices)} (NOT free)")
+                                logger.info(f"    → NOT free")
                             elif any(p in ['$0', '$0.00', '$0.0'] for p in price_matches):
                                 # Only $0 prices found
                                 has_free_price = True
-                                logger.info("  → Price: $0 (FREE)")
+                                logger.info("    → FREE")
                             else:
                                 # Has price patterns but unclear - be conservative
                                 has_free_price = False
-                                logger.info(f"  → Price patterns: {price_matches} (assuming NOT free)")
+                                logger.info(f"    → NOT free")
                         else:
                             # No price patterns found, try looking for price elements in divs
                             # Look for divs that might contain prices
@@ -718,16 +718,15 @@ class VoloBot:
                                         if div_prices:
                                             has_price_element = True
                                             found_price_value = ', '.join(div_prices)
-                                            logger.info(f"  Found price in div: {div_prices}")
                                             
                                             non_zero = [p for p in div_prices if p not in ['$0', '$0.00', '$0.0']]
                                             if non_zero:
                                                 has_free_price = False
-                                                logger.info(f"  → Div has non-zero price: {non_zero}")
+                                                logger.info(f"    → NOT free")
                                                 break
                                             elif any(p in ['$0', '$0.00', '$0.0'] for p in div_prices):
                                                 has_free_price = True
-                                                logger.info(f"  → Div has $0 price")
+                                                logger.info(f"    → FREE")
                                                 break
                                     except:
                                         continue
@@ -753,7 +752,6 @@ class VoloBot:
                                                 if price_text:
                                                     has_price_element = True
                                                     found_price_value = price_text
-                                                    logger.info(f"  Found price element: '{price_text}'")
                                                     
                                                     # Check for price patterns
                                                     elem_price_matches = re.findall(r'\$[\d.]+', price_text)
@@ -761,11 +759,11 @@ class VoloBot:
                                                         non_zero = [p for p in elem_price_matches if p not in ['$0', '$0.00', '$0.0']]
                                                         if non_zero:
                                                             has_free_price = False
-                                                            logger.info(f"  → Price element has non-zero price: {non_zero}")
+                                                            logger.info(f"    → NOT free")
                                                             break
                                                         elif any(p in ['$0', '$0.00', '$0.0'] for p in elem_price_matches):
                                                             has_free_price = True
-                                                            logger.info(f"  → Price element is $0")
+                                                            logger.info(f"    → FREE")
                                                             break
                                             if has_price_element:
                                                 break
@@ -775,7 +773,7 @@ class VoloBot:
                             # If still no price found, it's FREE
                             if not has_price_element:
                                 has_free_price = True
-                                logger.info("  → No price element or price pattern found in any div - event is FREE")
+                                logger.info("    → FREE")
                     
                     except Exception as e:
                         logger.warning(f"  Error checking price: {e}")
@@ -784,7 +782,7 @@ class VoloBot:
                         found_price_value = "error checking"
                     
                     if has_free_price:
-                        logger.info("✓ Event matches criteria: 'Volleyball Pickup' and $0/free")
+                        logger.info("    ✓ Matches criteria")
                         # Try to extract the URL/link for this event
                         event_url = None
                         try:
@@ -875,6 +873,88 @@ class VoloBot:
                                             event_url = f"https://www.volosports.com/{url_from_eval}"
                                 except:
                                     pass
+                            
+                            # Strategy 5: Try to get URL by checking if element has a click handler that navigates
+                            if not event_url:
+                                try:
+                                    # Check if clicking would navigate - get the URL from navigation
+                                    url_from_click = event.evaluate("""
+                                        el => {
+                                            // Check for router/navigation attributes (React, Vue, etc.)
+                                            if (el.getAttribute && el.getAttribute('data-href')) {
+                                                return el.getAttribute('data-href');
+                                            }
+                                            // Check for React Router link
+                                            if (el.__reactInternalInstance || el.__reactFiber) {
+                                                let fiber = el.__reactInternalInstance || el.__reactFiber;
+                                                while (fiber) {
+                                                    if (fiber.memoizedProps && fiber.memoizedProps.to) {
+                                                        return fiber.memoizedProps.to;
+                                                    }
+                                                    if (fiber.memoizedProps && fiber.memoizedProps.href) {
+                                                        return fiber.memoizedProps.href;
+                                                    }
+                                                    fiber = fiber.return;
+                                                }
+                                            }
+                                            // Check for common navigation patterns
+                                            let clickable = el;
+                                            for (let i = 0; i < 3; i++) {
+                                                if (!clickable) break;
+                                                // Check for data attributes
+                                                const attrs = clickable.attributes;
+                                                if (attrs) {
+                                                    for (let attr of attrs) {
+                                                        const name = attr.name.toLowerCase();
+                                                        if (name.includes('href') || name.includes('url') || name.includes('link')) {
+                                                            const val = attr.value;
+                                                            if (val && (val.startsWith('/') || val.startsWith('http'))) {
+                                                                return val;
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                clickable = clickable.parentElement;
+                                            }
+                                            return null;
+                                        }
+                                    """)
+                                    if url_from_click:
+                                        if url_from_click.startswith("/"):
+                                            event_url = f"https://www.volosports.com{url_from_click}"
+                                        elif url_from_click.startswith("http"):
+                                            event_url = url_from_click
+                                        else:
+                                            event_url = f"https://www.volosports.com/{url_from_click}"
+                                except:
+                                    pass
+                            
+                            # Strategy 6: Try clicking and intercepting navigation (last resort)
+                            if not event_url:
+                                try:
+                                    # Set up a promise to capture navigation
+                                    with page.expect_navigation(timeout=2000) as navigation_info:
+                                        # Try clicking to see where it goes
+                                        event.click()
+                                    if navigation_info:
+                                        event_url = navigation_info.value.url
+                                        # Navigate back
+                                        page.go_back()
+                                        page.wait_for_timeout(1000)
+                                except:
+                                    # If navigation interception fails, try to get URL from current page after click
+                                    try:
+                                        original_url = page.url
+                                        event.click()
+                                        page.wait_for_timeout(1000)
+                                        new_url = page.url
+                                        if new_url != original_url and 'volosports.com' in new_url:
+                                            event_url = new_url
+                                            # Navigate back
+                                            page.go_back()
+                                            page.wait_for_timeout(1000)
+                                    except:
+                                        pass
                         except:
                             pass
                         
@@ -889,12 +969,11 @@ class VoloBot:
                                 'url': event_url,
                                 'title': title
                             })
-                            logger.info(f"  → Extracted URL: {event_url[:80]}...")
+                            logger.info(f"    → URL: {event_url[:60]}...")
                         else:
-                            logger.warning(f"  ⚠ Could not extract URL for event - will skip this pickup")
+                            logger.warning(f"    ⚠ Could not extract URL - will skip")
                     else:
-                        price_info = found_price_value or "has price (not $0)"
-                        logger.info(f"✗ Event has 'Volleyball Pickup' but price is not $0: {price_info}")
+                        logger.info(f"    → NOT free")
                         
                 except Exception as e:
                     logger.warning(f"Error processing event: {e}")
