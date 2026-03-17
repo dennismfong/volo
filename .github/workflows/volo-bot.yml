@@ -2,11 +2,20 @@ name: Volo Sports Bot
 
 on:
   schedule:
-    # Run at 12:01 AM UTC daily (adjust timezone offset as needed)
-    # For PST (UTC-8): 12:01 AM PST = 8:01 AM UTC
-    # For EST (UTC-5): 12:01 AM EST = 5:01 AM UTC
+    # Run at 12:01 AM Pacific Time daily
+    # GitHub Actions uses UTC time, so we need to account for DST:
+    # - PST (UTC-8): 12:01 AM PST = 8:01 AM UTC
+    # - PDT (UTC-7): 12:01 AM PDT = 7:01 AM UTC
+    # GitHub Actions uses UTC time. Common timezone conversions:
+    # - PST (UTC-8): 12:01 AM PST = 8:01 AM UTC
+    # - PDT (UTC-7): 12:01 AM PDT = 7:01 AM UTC
+    # - CST (UTC-6): 12:01 AM CST = 6:01 AM UTC
+    # - CDT (UTC-5): 12:01 AM CDT = 5:01 AM UTC
+    # - EST (UTC-5): 12:01 AM EST = 5:01 AM UTC
+    # - EDT (UTC-4): 12:01 AM EDT = 4:01 AM UTC
+    # Note: GitHub Actions doesn't handle DST automatically, so you may need to adjust twice a year
     # Set ENABLE_SCHEDULE secret to "false" to disable scheduled runs
-    - cron: '1 8 * * *'  # 12:01 AM PST / 8:01 AM UTC
+    - cron: '1 6 * * *'  # 12:01 AM CST / 6:01 AM UTC (adjust based on your timezone)
   workflow_dispatch:  # Allows manual triggering for testing
 
 jobs:

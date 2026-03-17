@@ -97,7 +97,7 @@ Click **New repository secret** and add each of these:
 
 ## Step 4: Adjust Timezone (If Needed)
 
-The workflow is set to run at **12:01 AM PST** (8:01 AM UTC).
+The workflow is set to run at **12:01 AM PDT** (7:01 AM UTC) by default.
 
 To change the timezone:
 
