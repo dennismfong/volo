@@ -889,6 +889,41 @@ class VoloBot:
                                 pass
                         continue
                     
+                    # FIRST: Check if already registered - skip if so
+                    logger.info("Checking if already registered...")
+                    try:
+                        page_text = page.locator('body').inner_text().lower()
+                        already_registered_phrases = [
+                            'you are already registered',
+                            'already registered',
+                            'you have already registered',
+                            'view registration',
+                            'already signed up',
+                        ]
+                        
+                        is_already_registered = any(phrase in page_text for phrase in already_registered_phrases)
+                        
+                        if is_already_registered:
+                            logger.info("✓ Already registered for this pickup - skipping signup")
+                            # Navigate back to pickups page for next pickup
+                            if pickup_index + 1 < len(matching_pickups):
+                                logger.info("Navigating back to pickups page for next signup...")
+                                try:
+                                    volleyball_url = os.getenv('VOLO_VOLLEYBALL_URL', 
+                                        'https://www.volosports.com/discover?cityName=San%20Francisco&subView=DAILY&view=SPORTS&sportNames%5B0%5D=Volleyball')
+                                    page.goto(volleyball_url, wait_until='domcontentloaded', timeout=15000)
+                                    page.wait_for_timeout(2000)
+                                    logger.info("✓ Returned to pickups page")
+                                except:
+                                    try:
+                                        page.go_back()
+                                        page.wait_for_timeout(2000)
+                                    except:
+                                        pass
+                            continue  # Skip to next pickup
+                    except Exception as e:
+                        logger.debug(f"Error checking registration status: {e}")
+                    
                     # SECOND CHECK: Verify "Order Total" is $0.00 on the detail page
                     # This is a safety check in case price didn't show on the list page
                     logger.info("Verifying Order Total is $0.00 on detail page...")
@@ -924,14 +959,14 @@ class VoloBot:
                                 r'total\s*:?\s*(\$[\d.]+)',
                                 r'order\s+total[^\$]*(\$[\d.]+)',
                             ]
-                            match = None
+                            total_match = None
                             for pattern in total_patterns:
-                                match = re.search(pattern, page_text, re.IGNORECASE)
-                                if match:
+                                total_match = re.search(pattern, page_text, re.IGNORECASE)
+                                if total_match:
                                     break
                             
-                            if match:
-                                price_found = match.group(1)
+                            if total_match:
+                                price_found = total_match.group(1)
                                 price_normalized = price_found.replace('.00', '').replace('.0', '')
                                 if price_normalized == '$0':
                                     order_total_is_zero = True
@@ -943,18 +978,6 @@ class VoloBot:
                                 # Could not find Order Total - log warning but continue
                                 logger.warning("Could not find 'Order Total' on page, assuming it's $0.00 (passed initial check)")
                                 order_total_is_zero = True  # Assume it's free since it passed initial check
-                            
-                            if total_match:
-                                price_found = total_match.group(1)
-                                if price_found in ['$0', '$0.00', '$0.0']:
-                                    order_total_is_zero = True
-                                    logger.info("✓ Total is $0.00 - verified!")
-                                else:
-                                    order_total_is_zero = False
-                                    logger.info(f"✗ Total is NOT $0.00: {price_found}")
-                            else:
-                                # No price found near "total" - might be free
-                                # But also check if there are any prices on the page at all
                                 all_prices = re.findall(r'\$[\d.]+', page_text)
                                 if all_prices:
                                     # There are prices but none near "total" - might be free
